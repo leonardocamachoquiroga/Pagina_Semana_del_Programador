@@ -1,0 +1,24 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { TVRouter } from '../../components/TVRouter';
+import type { PostaId } from '../../types/game';
+
+export function getStaticPaths() {
+  return [
+    { params: { posta: '1' } },
+    { params: { posta: '2' } },
+    { params: { posta: '3' } },
+    { params: { posta: '4' } },
+    { params: { posta: '5' } },
+  ];
+}
+
+const { posta } = Astro.params;
+const initialPostaId = (Number(posta) as PostaId) || 1;
+---
+
+<Layout title={`TV Posta ${posta} | Vibecodear Jueguitos`}>
+  <div className="py-8">
+    <TVRouter initialPostaId={initialPostaId} client:only="react" />
+  </div>
+</Layout>
