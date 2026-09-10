@@ -1,289 +1,219 @@
-import React, { useState, useEffect } from 'react';
-import { Bug, CheckCircle, XCircle, AlertTriangle, ShieldCheck, Play, RotateCcw, Clock } from 'lucide-react';
-import { POSTAS, MASTER_PIN } from '../../utils/routing';
-import { completarPostaEquipo, getEquipos, subscribeToChanges } from '../../utils/storage';
+import React, { useState } from 'react';
+import { Bug, CheckCircle2, RotateCcw } from 'lucide-react';
+import { GameShell } from '../ui/GameShell';
+import { TeamValidationPanel } from '../ui/TeamValidationPanel';
+import { usePostaValidation } from '../../hooks/usePostaValidation';
+import { BUG_CHALLENGES, BUG_DIFFICULTIES, BUG_LANGUAGES, type BugDifficulty, type BugLanguageId, type CodeBugChallenge } from '../../utils/bug-hunt';
 
-interface CodeBugChallenge {
-  id: number;
-  titulo: string;
-  lenguaje: string;
-  lines: { lineNum: number; code: string; isBug: boolean; explanation?: string }[];
+interface BugRoundState {
+  selectedLines: number[];
+  isEvaluated: boolean;
+  score: number;
+  message: string;
 }
 
-const BUG_CHALLENGES: CodeBugChallenge[] = [
-  {
-    id: 1,
-    titulo: 'Bucle Infinito en Servidor de Notas',
-    lenguaje: 'JavaScript',
-    lines: [
-      { lineNum: 1, code: 'function calcularPromedio(notas) {', isBug: false },
-      { lineNum: 2, code: '  let total = 0;', isBug: false },
-      { lineNum: 3, code: '  for (let i = 0; i <= notas.length; i++) {', isBug: true, explanation: 'Off-by-one bug: i <= notas.length accede a un índice undefined' },
-      { lineNum: 4, code: '    total += notas[i];', isBug: false },
-      { lineNum: 5, code: '  }', isBug: false },
-      { lineNum: 6, code: '  return total / notas.length;', isBug: false },
-      { lineNum: 7, code: '}', isBug: false }
-    ]
-  },
-  {
-    id: 2,
-    titulo: 'Fuga de Memoria & Null Pointer en C++',
-    lenguaje: 'C++',
-    lines: [
-      { lineNum: 1, code: '#include <iostream>', isBug: false },
-      { lineNum: 2, code: 'int* crearArreglo() {', isBug: false },
-      { lineNum: 3, code: '  int arr[5] = {10, 20, 30, 40, 50};', isBug: false },
-      { lineNum: 4, code: '  return arr;', isBug: true, explanation: 'Retorna puntero a una variable local de stack destruida al salir' },
-      { lineNum: 5, code: '}', isBug: false },
-      { lineNum: 6, code: 'int main() { int* p = crearArreglo(); std::cout << p[0]; }', isBug: false }
-    ]
-  },
-  {
-    id: 3,
-    titulo: 'Inmutabilidad de Estado en React',
-    lenguaje: 'TypeScript',
-    lines: [
-      { lineNum: 1, code: 'const [items, setItems] = useState<string[]>([]);', isBug: false },
-      { lineNum: 2, code: 'function agregarItem(nuevo: string) {', isBug: false },
-      { lineNum: 3, code: '  items.push(nuevo);', isBug: true, explanation: 'Mutación directa del arreglo de estado sin disparar re-render' },
-      { lineNum: 4, code: '  setItems(items);', isBug: true, explanation: 'Misma referencia de arreglo pasada a setItems' },
-      { lineNum: 5, code: '}', isBug: false }
-    ]
-  }
-];
+type BugProgress = Record<BugLanguageId, Record<BugDifficulty, BugRoundState>>;
+
+const createBugRound = (): BugRoundState => ({
+  selectedLines: [],
+  isEvaluated: false,
+  score: 0,
+  message: ''
+});
+
+const createBugProgress = (): BugProgress => Object.fromEntries(
+  BUG_LANGUAGES.map((language) => [language.id, {
+    facil: createBugRound(),
+    intermedio: createBugRound(),
+    dificil: createBugRound()
+  }])
+) as BugProgress;
+
+const createCompletionMap = (): Record<BugLanguageId, boolean> => Object.fromEntries(
+  BUG_LANGUAGES.map((language) => [language.id, false])
+) as Record<BugLanguageId, boolean>;
 
 export const BugHuntGame: React.FC = () => {
-  const [currentChallengeIndex, setCurrentChallengeIndex] = useState(0);
-  const [selectedLines, setSelectedLines] = useState<number[]>([]);
-  const [isEvaluated, setIsEvaluated] = useState(false);
-  const [score, setScore] = useState(0);
-  const [selectedEquipoId, setSelectedEquipoId] = useState('');
-  const [equipos, setEquipos] = useState(getEquipos());
-  const [pinInput, setPinInput] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
-  const [successMsg, setSuccessMsg] = useState('');
+  const [selectedLanguageIndex, setSelectedLanguageIndex] = useState(0);
+  const [selectedDifficultyIndex, setSelectedDifficultyIndex] = useState(0);
+  const [progress, setProgress] = useState<BugProgress>(() => createBugProgress());
+  const [completedLanguages, setCompletedLanguages] = useState<Record<BugLanguageId, boolean>>(() => createCompletionMap());
+  const [finalResults, setFinalResults] = useState<Record<BugLanguageId, { score: number; title: string } | null>>(() => Object.fromEntries(
+    BUG_LANGUAGES.map((language) => [language.id, null])
+  ) as Record<BugLanguageId, { score: number; title: string } | null>);
+  const validation = usePostaValidation(4);
 
-  useEffect(() => {
-    const unsub = subscribeToChanges(() => setEquipos(getEquipos()));
-    return () => unsub();
-  }, []);
+  const selectedLanguage = BUG_LANGUAGES[selectedLanguageIndex];
+  const selectedDifficulty = BUG_DIFFICULTIES[selectedDifficultyIndex];
+  const challenge: CodeBugChallenge = BUG_CHALLENGES[selectedLanguage.id][selectedDifficulty.id];
+  const currentRound = progress[selectedLanguage.id][selectedDifficulty.id];
+  const bugCount = challenge.lines.filter((line) => line.isBug).length;
+  const isChallengeComplete = Boolean(completedLanguages[selectedLanguage.id]);
 
-  const challenge = BUG_CHALLENGES[currentChallengeIndex];
+  const resetChallenge = () => {
+    setProgress(createBugProgress());
+    setCompletedLanguages(createCompletionMap());
+    setFinalResults(Object.fromEntries(BUG_LANGUAGES.map((language) => [language.id, null])) as Record<BugLanguageId, { score: number; title: string } | null>);
+    setSelectedLanguageIndex(0);
+    setSelectedDifficultyIndex(0);
+    validation.clearMessage();
+  };
+
+  const resetCurrentLevel = () => {
+    setProgress((current) => ({
+      ...current,
+      [selectedLanguage.id]: {
+        ...current[selectedLanguage.id],
+        [selectedDifficulty.id]: createBugRound()
+      }
+    }));
+  };
+
+  const selectLanguage = (index: number) => {
+    setSelectedLanguageIndex(index);
+    setSelectedDifficultyIndex(0);
+    validation.clearMessage();
+  };
+
+  const selectDifficulty = (index: number) => {
+    setSelectedDifficultyIndex(index);
+  };
+
+  const updateCurrentRound = (update: (round: BugRoundState) => BugRoundState) => {
+    setProgress((current) => ({
+      ...current,
+      [selectedLanguage.id]: {
+        ...current[selectedLanguage.id],
+        [selectedDifficulty.id]: update(current[selectedLanguage.id][selectedDifficulty.id])
+      }
+    }));
+  };
 
   const toggleLine = (lineNum: number) => {
-    if (isEvaluated) return;
-    setSelectedLines((prev) =>
-      prev.includes(lineNum) ? prev.filter((l) => l !== lineNum) : [...prev, lineNum]
-    );
+    if (currentRound.isEvaluated || isChallengeComplete) return;
+    updateCurrentRound((round) => ({
+      ...round,
+      selectedLines: round.selectedLines.includes(lineNum)
+        ? round.selectedLines.filter((line) => line !== lineNum)
+        : [...round.selectedLines, lineNum]
+    }));
   };
 
-  const handleEvaluate = () => {
-    setIsEvaluated(true);
-    const bugLines = challenge.lines.filter((l) => l.isBug).map((l) => l.lineNum);
-    
-    const correctSelects = selectedLines.filter((l) => bugLines.includes(l)).length;
-    const incorrectSelects = selectedLines.filter((l) => !bugLines.includes(l)).length;
-    
-    let calculated = Math.max(0, (correctSelects / bugLines.length) * 100 - incorrectSelects * 25);
-    setScore(Math.round(calculated));
-  };
+  const evaluate = () => {
+    if (currentRound.isEvaluated) return;
 
-  const handleReset = () => {
-    setSelectedLines([]);
-    setIsEvaluated(false);
-    setScore(0);
-    setErrorMsg('');
-    setSuccessMsg('');
-  };
+    const bugLines = challenge.lines.filter((line) => line.isBug).map((line) => line.lineNum);
+    const correctSelections = currentRound.selectedLines.filter((line) => bugLines.includes(line)).length;
+    const incorrectSelections = currentRound.selectedLines.filter((line) => !bugLines.includes(line)).length;
+    const calculatedScore = Math.max(0, (correctSelections / bugLines.length) * 100 - incorrectSelections * 25);
+    const score = Math.round(calculatedScore);
+    const solved = score === 100 && correctSelections === bugLines.length && incorrectSelections === 0;
+    const nextDifficulty = BUG_DIFFICULTIES[selectedDifficultyIndex + 1];
+    const languageId = selectedLanguage.id;
 
-  const handleValidarPosta = () => {
-    if (!selectedEquipoId) {
-      setErrorMsg('Selecciona un equipo de 4 dígitos');
+    updateCurrentRound((round) => ({
+      ...round,
+      score,
+      isEvaluated: true,
+      message: solved && nextDifficulty
+        ? `${selectedDifficulty.label} resuelto. Continúa con ${nextDifficulty.label}.`
+        : solved && selectedDifficulty.id === 'dificil'
+          ? 'Desafío completado. Solicita la validación del encargado.'
+          : 'La selección tiene errores. Reinicia este nivel para intentarlo otra vez.'
+    }));
+
+    if (selectedDifficulty.id === 'dificil') {
+      setCompletedLanguages((current) => ({ ...current, [languageId]: true }));
+      setFinalResults((current) => ({ ...current, [languageId]: { score, title: challenge.titulo } }));
       return;
     }
-    const postaInfo = POSTAS.find((p) => p.id === 4);
-    if (pinInput !== postaInfo?.pin && pinInput !== MASTER_PIN) {
-      setErrorMsg('PIN de moderador incorrecto (PIN Posta 4: 1004)');
-      return;
-    }
 
-    const res = completarPostaEquipo(selectedEquipoId, 4, score || 100, 300, `Bugs encontrados en: ${challenge.titulo}`);
-    if (res) {
-      setSuccessMsg(`¡Posta 4 completada con éxito para el Equipo ${selectedEquipoId}!`);
-      setErrorMsg('');
-      setPinInput('');
-    } else {
-      setErrorMsg('Error al guardar progreso');
-    }
+    if (solved && nextDifficulty) setSelectedDifficultyIndex(selectedDifficultyIndex + 1);
   };
+
+  const finalResult = finalResults[selectedLanguage.id];
 
   return (
-    <div className="w-full max-w-5xl mx-auto p-4 sm:p-6 space-y-6">
-      
-      {/* Banner */}
-      <div className="glass-panel p-6 rounded-2xl relative overflow-hidden border-rose-500/30">
-        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30 font-mono">
-                POSTA 04
-              </span>
-              <span className="text-xs text-slate-400 font-mono">Encargado: Saul</span>
+    <GameShell posta={validation.posta} onReset={resetChallenge} resetLabel="Reiniciar">
+      <div className="game-toolbar game-toolbar--compact">
+        <div className="snippet-picker">
+          <div className="toolbar-group">
+            <span className="toolbar-label"><Bug aria-hidden="true" /> Lenguaje</span>
+            <div className="choice-tabs" role="group" aria-label="Seleccionar lenguaje">
+              {BUG_LANGUAGES.map((language, index) => (
+                <button type="button" className={`choice-tab ${selectedLanguageIndex === index ? 'choice-tab--selected' : ''}`} aria-pressed={selectedLanguageIndex === index} key={language.id} onClick={() => selectLanguage(index)}>
+                  {language.label}
+                </button>
+              ))}
             </div>
-            <h2 className="text-3xl font-extrabold text-white">
-              Encuentra el <span>Error (Bug Hunt)</span>
-            </h2>
-            <p className="text-sm text-slate-300">
-              Haz clic en las líneas de código que contengan bugs lógicos o de sintaxis.
-            </p>
           </div>
-
-          <div className="flex items-center gap-2 bg-slate-900/90 p-3 rounded-xl border border-slate-800">
-            <Bug className="w-6 h-6 text-rose-400" />
-            <div>
-              <span className="text-[10px] text-slate-400 font-mono uppercase block">Puntaje Bug Hunt</span>
-              <span className="text-2xl font-bold font-mono text-rose-300">{score} / 100</span>
+          <div className="toolbar-group">
+            <span className="toolbar-label">Dificultad</span>
+            <div className="choice-tabs" role="group" aria-label="Seleccionar dificultad">
+              {BUG_DIFFICULTIES.map((difficulty, index) => (
+                <button type="button" className={`choice-tab ${selectedDifficultyIndex === index ? 'choice-tab--selected' : ''}`} aria-pressed={selectedDifficultyIndex === index} key={difficulty.id} onClick={() => selectDifficulty(index)}>
+                  {difficulty.label}
+                </button>
+              ))}
             </div>
           </div>
         </div>
+        <span className="typing-round" aria-label={`Nivel ${selectedDifficultyIndex + 1} de 3`}>Nivel {selectedDifficultyIndex + 1} de 3</span>
+        <span className="game-toolbar__status">{currentRound.selectedLines.length} línea{currentRound.selectedLines.length === 1 ? '' : 's'} seleccionada{currentRound.selectedLines.length === 1 ? '' : 's'}</span>
       </div>
 
-      {/* Challenge Selector */}
-      <div className="flex flex-wrap items-center justify-between gap-3 glass-panel p-4 rounded-xl">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-bold text-slate-300">Caso de Prueba:</span>
-          {BUG_CHALLENGES.map((ch, idx) => (
-            <button
-              key={ch.id}
-              onClick={() => {
-                setCurrentChallengeIndex(idx);
-                handleReset();
-              }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                currentChallengeIndex === idx
-                  ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
-                  : 'bg-slate-800 text-slate-400 hover:text-white'
-              }`}
-            >
-              #{ch.id} {ch.lenguaje}
-            </button>
-          ))}
+      <section className="game-panel game-panel--focus bug-panel" aria-labelledby="bug-case-title">
+        <div className="game-panel__header game-panel__header--split">
+          <div>
+            <span className="eyebrow">{challenge.lenguaje} / {selectedDifficulty.label}</span>
+            <h2 id="bug-case-title">{challenge.titulo}</h2>
+            <p className="game-prompt">Selecciona {bugCount === 1 ? 'la línea que contiene el bug' : 'las líneas que contienen los bugs'}.</p>
+          </div>
+          <div className={`score-display ${currentRound.isEvaluated ? 'score-display--done' : ''}`} aria-live="polite"><strong>{currentRound.score}</strong><span>/ 100</span></div>
         </div>
 
-        <button
-          onClick={handleReset}
-          className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 rounded-lg flex items-center gap-1.5 border border-slate-700"
-        >
-          <RotateCcw className="w-3.5 h-3.5" /> Limpiar Selección
-        </button>
-      </div>
-
-      {/* Code Snippet Lines Clickable */}
-      <div className="glass-panel p-4 rounded-2xl border-rose-500/20 space-y-3">
-        <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-          <span className="text-xs font-mono text-slate-300 flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
-            {challenge.titulo} ({challenge.lenguaje})
-          </span>
-          <span className="text-xs text-slate-400 font-mono">
-            Líneas seleccionadas: {selectedLines.length}
-          </span>
-        </div>
-
-        <div className="bg-slate-950/90 rounded-xl p-2 border border-slate-800 space-y-1 font-mono text-xs">
+        <div className="challenge-list" role="list" aria-label="Líneas de código">
           {challenge.lines.map((line) => {
-            const isSelected = selectedLines.includes(line.lineNum);
-            let lineBg = 'hover:bg-slate-900/80 text-slate-300';
-
-            if (isEvaluated) {
-              if (line.isBug && isSelected) {
-                lineBg = 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300';
-              } else if (line.isBug && !isSelected) {
-                lineBg = 'bg-amber-500/20 border-amber-500/40 text-amber-300';
-              } else if (!line.isBug && isSelected) {
-                lineBg = 'bg-rose-500/20 border-rose-500/40 text-rose-300';
-              }
-            } else if (isSelected) {
-              lineBg = 'bg-rose-500/20 border-rose-500/40 text-rose-200';
-            }
-
+            const selected = currentRound.selectedLines.includes(line.lineNum);
+            const stateClass = !currentRound.isEvaluated ? (selected ? 'challenge-button--selected' : '') : line.isBug && selected ? 'challenge-button--correct' : line.isBug ? 'challenge-button--missed' : selected ? 'challenge-button--wrong' : '';
             return (
-              <div
-                key={line.lineNum}
-                onClick={() => toggleLine(line.lineNum)}
-                className={`p-2.5 rounded-lg border border-transparent cursor-pointer transition-colors flex items-start gap-3 ${lineBg}`}
-              >
-                <span className="w-6 text-right text-slate-500 select-none font-mono shrink-0">
-                  {line.lineNum}
-                </span>
-                <span className="flex-1 overflow-x-auto whitespace-pre">{line.code}</span>
-                {isEvaluated && line.isBug && (
-                  <span className="text-[11px] font-sans text-amber-300 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20 shrink-0">
-                    🐛 {line.explanation}
-                  </span>
-                )}
-              </div>
+              <button type="button" className={`challenge-button ${stateClass}`} key={line.lineNum} aria-pressed={selected} onClick={() => toggleLine(line.lineNum)} disabled={currentRound.isEvaluated || isChallengeComplete}>
+                <span className="challenge-line-number">{line.lineNum}</span>
+                <code className="challenge-code">{line.code}</code>
+                {currentRound.isEvaluated && line.isBug && <small>{line.explanation}</small>}
+              </button>
             );
           })}
         </div>
 
-        {!isEvaluated ? (
-          <button
-            onClick={handleEvaluate}
-            className="w-full py-2.5 bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-400 hover:to-pink-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-rose-500/20 transition-all flex items-center justify-center gap-2"
-          >
-            <Bug className="w-4 h-4" /> Validar Selección de Bugs
-          </button>
-        ) : (
-          <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 text-center">
-            <span className="text-xs font-bold text-slate-200">
-              Evaluación completada. Puntaje obtenido: {score}/100.
-            </span>
-          </div>
-        )}
-      </div>
-
-      {/* Moderator Form */}
-      <div className="glass-panel p-5 rounded-xl border-rose-500/20 space-y-3">
-        <h3 className="text-sm font-bold text-white flex items-center gap-2">
-          <ShieldCheck className="w-4 h-4 text-rose-400" />
-          Aprobación por Saul (PIN: 1004)
-        </h3>
-
-        {errorMsg && <p className="text-xs text-rose-400 bg-rose-500/10 p-2 rounded">{errorMsg}</p>}
-        {successMsg && <p className="text-xs text-emerald-400 bg-emerald-500/10 p-2 rounded">{successMsg}</p>}
-
-        <div className="flex flex-wrap items-center gap-3">
-          <select
-            value={selectedEquipoId}
-            onChange={(e) => setSelectedEquipoId(e.target.value)}
-            className="flex-1 bg-slate-900 border border-slate-700 text-white text-xs rounded-lg p-2.5 font-mono"
-          >
-            <option value="">-- Seleccionar Equipo (ID 4 Dígitos) --</option>
-            {equipos.map((eq) => (
-              <option key={eq.id} value={eq.id}>
-                [{eq.id}] {eq.nombre}
-              </option>
-            ))}
-          </select>
-
-          <input
-            type="password"
-            placeholder="PIN (1004)"
-            value={pinInput}
-            onChange={(e) => setPinInput(e.target.value)}
-            className="w-36 bg-slate-900 border border-slate-700 text-white text-xs rounded-lg p-2.5 font-mono text-center"
-          />
-
-          <button
-            onClick={handleValidarPosta}
-            className="px-5 py-2.5 bg-gradient-to-r from-rose-500 to-pink-600 text-white font-bold text-xs rounded-lg hover:brightness-110 shadow-md shadow-rose-500/20"
-          >
-            Validar Posta 4
-          </button>
+        <div className="game-panel__footer">
+          {!currentRound.isEvaluated ? (
+            <button type="button" className="button button-primary" onClick={evaluate}>
+              <Bug aria-hidden="true" /> Evaluar selección
+            </button>
+          ) : currentRound.score < 100 && selectedDifficulty.id !== 'dificil' ? (
+            <div className="form-actions"><p className="feedback feedback--error" aria-live="polite">Resultado: {currentRound.score}/100. Revisa la línea marcada.</p><button type="button" className="button button-secondary" onClick={resetCurrentLevel}><RotateCcw aria-hidden="true" /> Reintentar nivel</button></div>
+          ) : (
+            <p className="feedback feedback--success" aria-live="polite"><CheckCircle2 aria-hidden="true" /> Resultado: {currentRound.score}/100. {currentRound.message}</p>
+          )}
         </div>
-      </div>
+      </section>
 
-    </div>
+      <TeamValidationPanel
+        posta={validation.posta}
+        equipos={validation.equipos}
+        selectedTeamId={validation.selectedTeamId}
+        onTeamChange={validation.setSelectedTeamId}
+        pin={validation.pin}
+        onPinChange={validation.setPin}
+        onValidate={() => validation.validate(finalResult?.score ?? currentRound.score, 300, `Bugs encontrados en: ${finalResult?.title ?? challenge.titulo}`)}
+        isLoading={validation.isLoading}
+        isValidating={validation.isValidating}
+        source={validation.source}
+        connectionError={validation.error}
+        message={validation.message}
+        disabled={!isChallengeComplete}
+      />
+    </GameShell>
   );
 };
