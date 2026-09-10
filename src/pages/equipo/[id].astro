@@ -2,16 +2,9 @@
 import Layout from '../../layouts/Layout.astro';
 import { TeamDashboard } from '../../components/TeamDashboard';
 
-export function getStaticPaths() {
-  const ids = ['1462', '6462', '1024', '2048', '4096', '8192', '7351', '9900', '3141', '5555'];
-  return ids.map((id) => ({ params: { id } }));
-}
-
 const { id } = Astro.params;
 ---
 
-<Layout title={`Equipo ${id} | Vibecodear Jueguitos`}>
-  <div className="py-8">
-    <TeamDashboard initialId={id} client:only="react" />
-  </div>
+<Layout title={`Equipo ${id} | Día del Programador UCB`}>
+  <TeamDashboard initialId={id} client:only="react" />
 </Layout>
