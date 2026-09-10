@@ -1,201 +1,107 @@
-import React, { useState, useEffect } from 'react';
-import { Palette, Layout, Clock, CheckCircle, Sparkles, RefreshCw, Play, Pause, RotateCcw } from 'lucide-react';
-import { POSTAS, MASTER_PIN } from '../../utils/routing';
-import { completarPostaEquipo, getEquipos, subscribeToChanges } from '../../utils/storage';
+import React, { useEffect, useState } from 'react';
+import { CheckCircle2, Layers3, Pause, Play, RotateCcw } from 'lucide-react';
+import { GameShell } from '../ui/GameShell';
+import { TeamValidationPanel } from '../ui/TeamValidationPanel';
+import { usePostaValidation } from '../../hooks/usePostaValidation';
 
+const LIMIT_SECONDS = 10 * 60;
 const TOPICS = [
-  { id: 1, titulo: 'Plataforma de Tutorías UCB', desc: 'Sistema de reserva de tutores entre estudiantes con agendamiento y valoraciones.' },
-  { id: 2, titulo: 'Dashboard de Hackathon 2026', desc: 'Panel en tiempo real para votaciones de jueces, tabla de posiciones y timer de entregas.' },
-  { id: 3, titulo: 'Red de Proyectos Open Source', desc: 'Showcase interactivo de código creado por estudiantes con repositorios y medallas.' },
-  { id: 4, titulo: 'Asistente IA para Horarios', desc: 'Interfaz conversacional y visual para optimizar la inscripción de materias.' }
+  { id: 1, titulo: 'Plataforma de tutorías UCB', desc: 'Sistema de reserva de tutores entre estudiantes con agendamiento y valoraciones.' },
+  { id: 2, titulo: 'Dashboard de hackathon 2026', desc: 'Panel para votaciones de jueces, posiciones y tiempo restante de entregas.' },
+  { id: 3, titulo: 'Red de proyectos open source', desc: 'Showcase de código creado por estudiantes con repositorios y reconocimientos.' },
+  { id: 4, titulo: 'Asistente IA para horarios', desc: 'Interfaz conversacional para optimizar la inscripción de materias.' }
 ];
+const formatTime = (seconds: number) => `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 
 export const WebDesignDisplay: React.FC = () => {
   const [topicIndex, setTopicIndex] = useState(0);
-  const [secondsLeft, setSecondsLeft] = useState(600);
+  const [secondsLeft, setSecondsLeft] = useState(LIMIT_SECONDS);
   const [isRunning, setIsRunning] = useState(false);
-  const [selectedEquipoId, setSelectedEquipoId] = useState('');
-  const [equipos, setEquipos] = useState(getEquipos());
-  const [pinInput, setPinInput] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
-  const [successMsg, setSuccessMsg] = useState('');
-
-  useEffect(() => {
-    const unsub = subscribeToChanges(() => setEquipos(getEquipos()));
-    return () => unsub();
-  }, []);
-
-  useEffect(() => {
-    let timer: NodeJS.Timeout | null = null;
-    if (isRunning && secondsLeft > 0) {
-      timer = setInterval(() => setSecondsLeft((prev) => prev - 1), 1000);
-    } else if (secondsLeft === 0) {
-      setIsRunning(false);
-    }
-    return () => { if (timer) clearInterval(timer); };
-  }, [isRunning, secondsLeft]);
-
+  const validation = usePostaValidation(3);
   const currentTopic = TOPICS[topicIndex];
 
-  const handleValidarPosta = () => {
-    if (!selectedEquipoId) {
-      setErrorMsg('Selecciona un equipo de 4 dígitos');
-      return;
+  useEffect(() => {
+    if (!isRunning || secondsLeft === 0) {
+      if (secondsLeft === 0) setIsRunning(false);
+      return undefined;
     }
-    const postaInfo = POSTAS.find((p) => p.id === 3);
-    if (pinInput !== postaInfo?.pin && pinInput !== MASTER_PIN) {
-      setErrorMsg('PIN de moderador incorrecto (PIN Posta 3: 1003)');
-      return;
-    }
+    const timer = window.setInterval(() => setSecondsLeft((value) => Math.max(0, value - 1)), 1000);
+    return () => window.clearInterval(timer);
+  }, [isRunning, secondsLeft]);
 
-    const res = completarPostaEquipo(selectedEquipoId, 3, 100, 600 - secondsLeft, `Tema: ${currentTopic.titulo}`);
-    if (res) {
-      setSuccessMsg(`¡Posta 3 completada con éxito para el Equipo ${selectedEquipoId}!`);
-      setErrorMsg('');
-      setPinInput('');
-    } else {
-      setErrorMsg('Error al guardar progreso');
-    }
+  const resetGame = () => {
+    setSecondsLeft(LIMIT_SECONDS);
+    setIsRunning(false);
+    validation.clearMessage();
   };
 
-  const mins = Math.floor(secondsLeft / 60);
-  const secs = secondsLeft % 60;
+  const selectTopic = (index: number) => {
+    setTopicIndex(index);
+    resetGame();
+  };
 
   return (
-    <div className="w-full max-w-5xl mx-auto p-4 sm:p-6 space-y-6">
-      
-      {/* Header */}
-      <div className="glass-panel p-6 rounded-2xl relative overflow-hidden border-purple-500/30">
-        <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30 font-mono">
-                POSTA 03
-              </span>
-              <span className="text-xs text-slate-400 font-mono">Encargado: Juanma</span>
-            </div>
-            <h2 className="text-3xl font-extrabold text-white">
-              Tema <span>Página Web</span>
-            </h2>
-            <p className="text-sm text-slate-300 max-w-lg">
-              Diseño conceptual, estructura de datos y propuesta de UI/UX en 10 minutos.
-            </p>
-          </div>
-
-          {/* Timer Display */}
-          <div className="flex flex-col items-center justify-center p-5 bg-slate-950/90 rounded-2xl border border-purple-500/30 shadow-xl min-w-[220px]">
-            <span className="text-[10px] text-purple-400 font-mono uppercase tracking-widest flex items-center gap-1">
-              <Clock className="w-3.5 h-3.5" /> Cronómetro UI
-            </span>
-            <span className="text-4xl font-black font-mono text-purple-300 my-1">
-              {mins.toString().padStart(2, '0')}:{secs.toString().padStart(2, '0')}
-            </span>
-            <div className="flex items-center gap-2 mt-1">
-              <button
-                onClick={() => setIsRunning(!isRunning)}
-                className="px-3 py-1 bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 rounded text-xs font-bold flex items-center gap-1 border border-purple-500/40"
-              >
-                {isRunning ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-                {isRunning ? 'Pausar' : 'Iniciar'}
+    <GameShell posta={validation.posta} onReset={resetGame}>
+      <div className="game-toolbar game-toolbar--compact">
+        <div className="snippet-picker">
+          <span className="toolbar-label"><Layers3 aria-hidden="true" /> Brief</span>
+          <div className="choice-tabs" role="group" aria-label="Seleccionar brief">
+            {TOPICS.map((topic, index) => (
+              <button type="button" key={topic.id} className={`choice-tab ${topicIndex === index ? 'choice-tab--selected' : ''}`} aria-pressed={topicIndex === index} onClick={() => selectTopic(index)}>
+                {String(topic.id).padStart(2, '0')}
               </button>
-              <button
-                onClick={() => { setIsRunning(false); setSecondsLeft(600); }}
-                className="px-2 py-1 bg-slate-800 text-slate-400 hover:text-white rounded text-xs"
-              >
-                <RotateCcw className="w-3 h-3" />
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Topic Card */}
-      <div className="glass-panel p-6 rounded-2xl border-purple-500/20 space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Palette className="w-5 h-5 text-purple-400" />
-            <h3 className="text-base font-bold text-white">Reto de Diseño Asignado:</h3>
-          </div>
-          <button
-            onClick={() => setTopicIndex((prev) => (prev + 1) % TOPICS.length)}
-            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-purple-300 flex items-center gap-1.5 border border-slate-700 transition-colors"
-          >
-            <RefreshCw className="w-3.5 h-3.5" /> Cambiar Tema
-          </button>
-        </div>
-
-        <div className="p-4 bg-slate-950/80 rounded-xl border border-slate-800 space-y-2">
-          <h4 className="text-xl font-bold text-ucb-gold">{currentTopic.titulo}</h4>
-          <p className="text-sm text-slate-300 leading-relaxed">{currentTopic.desc}</p>
-        </div>
-
-        {/* Deliverables Checklist */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
-          <div className="p-3 bg-slate-900/60 rounded-lg border border-slate-800 flex items-start gap-2">
-            <Layout className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
-            <div>
-              <span className="text-xs font-bold text-white block">1. Layout & Hero</span>
-              <span className="text-[11px] text-slate-400">Estructura visual principal</span>
-            </div>
-          </div>
-          <div className="p-3 bg-slate-900/60 rounded-lg border border-slate-800 flex items-start gap-2">
-            <Sparkles className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
-            <div>
-              <span className="text-xs font-bold text-white block">2. Valor Diferencial</span>
-              <span className="text-[11px] text-slate-400">Funcionalidad estrella</span>
-            </div>
-          </div>
-          <div className="p-3 bg-slate-900/60 rounded-lg border border-slate-800 flex items-start gap-2">
-            <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-            <div>
-              <span className="text-xs font-bold text-white block">3. Pitch Expreso</span>
-              <span className="text-[11px] text-slate-400">Exposición breve a Juanma</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Validation Form */}
-      <div className="glass-panel p-5 rounded-xl border-purple-500/20 space-y-3">
-        <h3 className="text-sm font-bold text-white flex items-center gap-2">
-          <CheckCircle className="w-4 h-4 text-purple-400" />
-          Aprobación por Juanma (PIN: 1003)
-        </h3>
-
-        {errorMsg && <p className="text-xs text-rose-400 bg-rose-500/10 p-2 rounded">{errorMsg}</p>}
-        {successMsg && <p className="text-xs text-emerald-400 bg-emerald-500/10 p-2 rounded">{successMsg}</p>}
-
-        <div className="flex flex-wrap items-center gap-3">
-          <select
-            value={selectedEquipoId}
-            onChange={(e) => setSelectedEquipoId(e.target.value)}
-            className="flex-1 bg-slate-900 border border-slate-700 text-white text-xs rounded-lg p-2.5 font-mono"
-          >
-            <option value="">-- Seleccionar Equipo (ID 4 Dígitos) --</option>
-            {equipos.map((eq) => (
-              <option key={eq.id} value={eq.id}>
-                [{eq.id}] {eq.nombre}
-              </option>
             ))}
-          </select>
-
-          <input
-            type="password"
-            placeholder="PIN (1003)"
-            value={pinInput}
-            onChange={(e) => setPinInput(e.target.value)}
-            className="w-36 bg-slate-900 border border-slate-700 text-white text-xs rounded-lg p-2.5 font-mono text-center"
-          />
-
-          <button
-            onClick={handleValidarPosta}
-            className="px-5 py-2.5 bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-bold text-xs rounded-lg hover:brightness-110 shadow-md shadow-purple-500/20"
-          >
-            Validar Posta 3
-          </button>
+          </div>
         </div>
+        <span className="game-toolbar__status">Define una solución y preséntala al encargado</span>
       </div>
 
-    </div>
+      <section className="game-panel game-panel--focus design-panel" aria-labelledby="design-brief-title">
+        <div className="design-brief">
+          <div className="design-brief__topline">
+            <span className="eyebrow">Brief {String(currentTopic.id).padStart(2, '0')} / 04</span>
+            <span className="game-state game-state--active"><i aria-hidden="true" /> En curso</span>
+          </div>
+          <h2 id="design-brief-title">{currentTopic.titulo}</h2>
+          <p>{currentTopic.desc}</p>
+          <div className="deliverable-strip" aria-label="Entregables">
+            <span><b>01</b> Estructura</span>
+            <span><b>02</b> Diferencial</span>
+            <span><b>03</b> Pitch</span>
+          </div>
+        </div>
+
+        <div className={`timer-card timer-card--hero ${secondsLeft < 120 ? 'timer-card--critical' : ''}`} aria-live="polite">
+          <span>Tiempo restante</span>
+          <strong>{formatTime(secondsLeft)}</strong>
+          <div className="timer-actions">
+            <button type="button" className="button button-primary" onClick={() => setIsRunning((value) => !value)} disabled={secondsLeft === 0}>
+              {isRunning ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" fill="currentColor" />}
+              {isRunning ? 'Pausar' : 'Iniciar'}
+            </button>
+            <button type="button" className="control-button control-button--compact" onClick={resetGame}>
+              <RotateCcw aria-hidden="true" /> Reiniciar
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <p className="game-note"><CheckCircle2 aria-hidden="true" /> Presenta el wireframe al encargado cuando tengas una historia completa.</p>
+
+      <TeamValidationPanel
+        posta={validation.posta}
+        equipos={validation.equipos}
+        selectedTeamId={validation.selectedTeamId}
+        onTeamChange={validation.setSelectedTeamId}
+        pin={validation.pin}
+        onPinChange={validation.setPin}
+        onValidate={() => validation.validate(100, LIMIT_SECONDS - secondsLeft, `Tema: ${currentTopic.titulo}`)}
+        isLoading={validation.isLoading}
+        isValidating={validation.isValidating}
+        source={validation.source}
+        connectionError={validation.error}
+        message={validation.message}
+      />
+    </GameShell>
   );
 };
