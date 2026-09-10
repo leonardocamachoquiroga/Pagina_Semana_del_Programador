@@ -1,4 +1,4 @@
-import type { Posta, PostaId, Equipo, ProgresoPosta } from '../types/game';
+import type { Equipo, Posta, PostaId } from '../types/game';
 
 export const POSTAS: Posta[] = [
   {
@@ -6,12 +6,15 @@ export const POSTAS: Posta[] = [
     titulo: 'Speedtest de Código',
     encargado: 'Gadiel',
     tipo: 'speedtest',
-    descripcion: 'Transcribe y resuelve algoritmos lo más rápido posible con alta precisión.',
-    pin: '1001',
+    categoria: 'Código',
+    descripcion: 'Transcribe un snippet con velocidad, atención y precisión.',
+    duracionMinutos: 10,
+    jugadores: 'Equipo completo',
+    accent: 'cyan',
     instrucciones: [
-      'Visualiza el snippet de código en la pantalla de TV.',
+      'Visualiza el snippet de código asignado.',
       'Transcribe el código en el editor minimizando errores tipográficos.',
-      'Al presionar Enviar, el temporizador medirá tus WPM y precisión.'
+      'Al completar, solicita al moderador validar el resultado.'
     ]
   },
   {
@@ -19,25 +22,31 @@ export const POSTAS: Posta[] = [
     titulo: 'Bloques de Wendo',
     encargado: 'Carla',
     tipo: 'wendo',
-    descripcion: 'Demuestra tu agilidad en el reto físico de ensamble de bloques Wendo.',
-    pin: '1002',
+    categoria: 'Reto físico',
+    descripcion: 'Coordina a tu equipo para construir el patrón de bloques en el menor tiempo.',
+    duracionMinutos: 10,
+    jugadores: 'Equipo completo',
+    accent: 'amber',
     instrucciones: [
-      'Sigue la estructura demostrada por Carla en el módulo físico.',
-      'Sincroniza a tu equipo para armar el patrón en el menor tiempo.',
-      'Solicita al moderador validar el código al culminar el reto.'
+      'Sigue la estructura demostrada en la estación física.',
+      'Sincroniza a tu equipo para armar el patrón.',
+      'Solicita al encargado validar la construcción terminada.'
     ]
   },
   {
     id: 3,
-    titulo: 'Tema Página Web',
+    titulo: 'Tema: Página Web',
     encargado: 'Juanma',
     tipo: 'webdesign',
-    descripcion: 'Definición conceptual y wireframing expreso de arquitectura web.',
-    pin: '1003',
+    categoria: 'Diseño y UX',
+    descripcion: 'Define una arquitectura web y un wireframe expreso a partir de un problema real.',
+    duracionMinutos: 10,
+    jugadores: 'Equipo completo',
+    accent: 'indigo',
     instrucciones: [
-      'Recibe el requerimiento conceptual planteado por Juanma.',
-      'Discute la estructura visual, UX y secciones clave en 10 minutos.',
-      'Presenta el wireframe/propuesta al encargado para obtener la clave.'
+      'Recibe el requerimiento conceptual del encargado.',
+      'Discute la estructura visual, UX y secciones clave.',
+      'Presenta la propuesta al encargado para obtener la validación.'
     ]
   },
   {
@@ -45,69 +54,66 @@ export const POSTAS: Posta[] = [
     titulo: 'Encuentra el Error',
     encargado: 'Saul',
     tipo: 'bughunt',
+    categoria: 'Debugging',
     descripcion: 'Detecta bugs lógicos y sintácticos en código en tiempo récord.',
-    pin: '1004',
+    duracionMinutos: 10,
+    jugadores: 'Equipo completo',
+    accent: 'critical',
     instrucciones: [
-      'Examina los bloques de código presentados en la pantalla de TV.',
-      'Identifica exactamente las líneas con errores sintácticos o de lógica.',
-      'Selecciona los bugs correctos antes de agotar el tiempo.'
+      'Examina los bloques de código presentados.',
+      'Identifica exactamente las líneas con errores.',
+      'Selecciona los bugs correctos antes de validar.'
     ]
   },
   {
     id: 5,
-    titulo: 'Juegos Lógicos (Hanoi)',
+    titulo: 'Torre de Hanoi',
     encargado: 'Adro',
     tipo: 'hanoi',
-    descripcion: 'Resuelve el acertijo lógico interactivo de la Torre de Hanoi en la TV.',
-    pin: '1005',
+    categoria: 'Lógica',
+    descripcion: 'Resuelve el puzzle de la Torre de Hanoi con la menor cantidad de movimientos.',
+    duracionMinutos: 10,
+    jugadores: 'Equipo completo',
+    accent: 'success',
     instrucciones: [
-      'Mueve la torre de discos hacia el poste de destino.',
-      'No puedes colocar un disco más grande sobre uno más pequeño.',
-      'Completa el puzzle en la menor cantidad de movimientos.'
+      'Comienza con todos los discos ordenados en la Torre 1.',
+      'Usa la Torre 2 como auxiliar y mueve solo un disco válido por turno.',
+      'Nunca coloques un disco grande sobre uno más pequeño.',
+      'La victoria ocurre únicamente cuando todos los discos llegan a la Torre 3.'
     ]
   }
 ];
 
-export const MASTER_PIN = 'ADMIN2026';
-
-/**
- * Obtiene la secuencia circular de postas para un equipo comenzando en su postaInicial.
- */
+// Solo se usa como compatibilidad para el modo local/offline. La administración remota usa MODERATOR_PIN.
 export function getSecuenciaPostas(postaInicial: PostaId): PostaId[] {
   const secuencia: PostaId[] = [];
   let actual = postaInicial;
-  for (let i = 0; i < 5; i++) {
+
+  for (let i = 0; i < POSTAS.length; i += 1) {
     secuencia.push(actual);
-    actual = (actual % 5 + 1) as PostaId;
+    actual = (actual % POSTAS.length + 1) as PostaId;
   }
+
   return secuencia;
 }
 
-/**
- * Determina la posta activa actual (siguiente misión) para un equipo.
- * Retorna null si el equipo completó las 5 postas.
- */
 export function getSiguientePosta(equipo: Equipo): Posta | null {
   const secuencia = getSecuenciaPostas(equipo.postaInicial);
+
   for (const id of secuencia) {
     const progreso = equipo.progresos[id];
     if (!progreso || progreso.estado !== 'completado') {
-      return POSTAS.find((p) => p.id === id) || null;
+      return POSTAS.find((posta) => posta.id === id) ?? null;
     }
   }
+
   return null;
 }
 
-/**
- * Cuenta cuántas postas ha completado el equipo (0 a 5).
- */
 export function getPostasCompletadasCount(equipo: Equipo): number {
-  return Object.values(equipo.progresos).filter((p) => p.estado === 'completado').length;
+  return POSTAS.filter((posta) => equipo.progresos[posta.id]?.estado === 'completado').length;
 }
 
-/**
- * Verifica si el equipo ha completado el 100% (5/5).
- */
 export function esEquipoCompletado(equipo: Equipo): boolean {
-  return getPostasCompletadasCount(equipo) === 5;
+  return getPostasCompletadasCount(equipo) === POSTAS.length;
 }
