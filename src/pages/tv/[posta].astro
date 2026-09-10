@@ -3,22 +3,11 @@ import Layout from '../../layouts/Layout.astro';
 import { TVRouter } from '../../components/TVRouter';
 import type { PostaId } from '../../types/game';
 
-export function getStaticPaths() {
-  return [
-    { params: { posta: '1' } },
-    { params: { posta: '2' } },
-    { params: { posta: '3' } },
-    { params: { posta: '4' } },
-    { params: { posta: '5' } },
-  ];
-}
-
 const { posta } = Astro.params;
-const initialPostaId = (Number(posta) as PostaId) || 1;
+const parsedPosta = Number(posta);
+const initialPostaId = ([1, 2, 3, 4, 5].includes(parsedPosta) ? parsedPosta : 1) as PostaId;
 ---
 
-<Layout title={`TV Posta ${posta} | Vibecodear Jueguitos`}>
-  <div className="py-8">
-    <TVRouter initialPostaId={initialPostaId} client:only="react" />
-  </div>
+<Layout title={`Posta ${initialPostaId} | Día del Programador UCB`}>
+  <TVRouter initialPostaId={initialPostaId} client:only="react" />
 </Layout>

@@ -3,8 +3,6 @@ import Layout from '../../layouts/Layout.astro';
 import { TeamDashboard } from '../../components/TeamDashboard';
 ---
 
-<Layout title="Vista de Equipo Móvil | Vibecodear Jueguitos">
-  <div className="py-8">
-    <TeamDashboard client:only="react" />
-  </div>
+<Layout title="Ruta de equipo | Día del Programador UCB">
+  <TeamDashboard client:only="react" />
 </Layout>

@@ -2,13 +2,18 @@ export type PostaId = 1 | 2 | 3 | 4 | 5;
 
 export type TipoPosta = 'speedtest' | 'wendo' | 'webdesign' | 'bughunt' | 'hanoi';
 
+export type PostaAccent = 'cyan' | 'indigo' | 'amber' | 'critical' | 'success';
+
 export interface Posta {
   id: PostaId;
   titulo: string;
   encargado: string;
   tipo: TipoPosta;
+  categoria: string;
   descripcion: string;
-  pin: string;
+  duracionMinutos: number;
+  jugadores: string;
+  accent: PostaAccent;
   instrucciones: string[];
 }
 
@@ -24,11 +29,21 @@ export interface ProgresoPosta {
 }
 
 export interface Equipo {
-  id: string; // ID de 4 dígitos (ej: "1462", "6462")
+  id: string;
   nombre: string;
+  members: string[];
+  active: boolean;
   postaInicial: PostaId;
   progresos: Record<PostaId, ProgresoPosta>;
   creadoEn: string;
+}
+
+export interface RemoteTeam {
+  id: string;
+  name: string;
+  members: string[];
+  active: boolean;
+  created_at: string;
 }
 
 export interface Premio {

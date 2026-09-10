@@ -1,303 +1,259 @@
-import React, { useState, useEffect } from 'react';
-import { Puzzle, RotateCcw, Trophy, CheckCircle, Clock, ShieldCheck, Sparkles } from 'lucide-react';
-import { POSTAS, MASTER_PIN } from '../../utils/routing';
-import { completarPostaEquipo, getEquipos, subscribeToChanges } from '../../utils/storage';
+import React, { useEffect, useRef, useState } from 'react';
+import { CircleDot, Trophy } from 'lucide-react';
+import { GameShell } from '../ui/GameShell';
+import { TeamValidationPanel } from '../ui/TeamValidationPanel';
+import { usePostaValidation } from '../../hooks/usePostaValidation';
+import { createHanoiPegs, getHanoiRenderOrder, isHanoiSolved, moveDisk, type HanoiPegs } from '../../utils/hanoi';
+
+const DISK_COLORS = ['#5DE2A1', '#11B8EE', '#F0C65B', '#96A4FF', '#FF7B8A'];
+
+interface RectSnapshot {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+interface MovingDisk {
+  size: number;
+  from: number;
+  to: number;
+  fromRect: RectSnapshot | null;
+  token: number;
+}
+
+interface DiskFlight extends MovingDisk {
+  toRect: RectSnapshot;
+}
+
+const pegName = (index: number) => `Torre ${index + 1}`;
+const diskKey = (pegIndex: number, diskSize: number) => `${pegIndex}-${diskSize}`;
+const formatTime = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+
+function snapshotRect(element: HTMLElement | null): RectSnapshot | null {
+  if (!element) return null;
+  const rect = element.getBoundingClientRect();
+  return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+}
 
 export const HanoiGame: React.FC = () => {
   const [numDisks, setNumDisks] = useState(3);
-  const [pegs, setPegs] = useState<number[][]>([[3, 2, 1], [], []]);
+  const [pegs, setPegs] = useState<HanoiPegs>(() => createHanoiPegs(3));
   const [selectedPegIndex, setSelectedPegIndex] = useState<number | null>(null);
   const [moveCount, setMoveCount] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [isWon, setIsWon] = useState(false);
-  const [selectedEquipoId, setSelectedEquipoId] = useState('');
-  const [equipos, setEquipos] = useState(getEquipos());
-  const [pinInput, setPinInput] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
-  const [successMsg, setSuccessMsg] = useState('');
+  const [movingDisk, setMovingDisk] = useState<MovingDisk | null>(null);
+  const [flight, setFlight] = useState<DiskFlight | null>(null);
+  const [playMessage, setPlayMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const diskRefs = useRef<Record<string, HTMLSpanElement | null>>({});
+  const isMovingRef = useRef(false);
+  const animationTokenRef = useRef(0);
+  const validation = usePostaValidation(5);
 
   useEffect(() => {
-    const unsub = subscribeToChanges(() => setEquipos(getEquipos()));
-    return () => unsub();
-  }, []);
-
-  // Timer loop
-  useEffect(() => {
-    let timer: NodeJS.Timeout | null = null;
-    if (isTimerRunning && !isWon) {
-      timer = setInterval(() => setElapsedSeconds((prev) => prev + 1), 1000);
-    } else {
-      if (timer) clearInterval(timer);
-    }
-    return () => { if (timer) clearInterval(timer); };
+    if (!isTimerRunning || isWon) return undefined;
+    const timer = window.setInterval(() => setElapsedSeconds((value) => value + 1), 1000);
+    return () => window.clearInterval(timer);
   }, [isTimerRunning, isWon]);
 
+  useEffect(() => {
+    if (!movingDisk) {
+      setFlight(null);
+      return undefined;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const targetRect = snapshotRect(diskRefs.current[diskKey(movingDisk.to, movingDisk.size)]);
+      if (!movingDisk.fromRect || !targetRect) {
+        isMovingRef.current = false;
+        setMovingDisk(null);
+        return;
+      }
+      setFlight({ ...movingDisk, toRect: targetRect });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [movingDisk]);
+
+  useEffect(() => {
+    if (!flight) return undefined;
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const finish = window.setTimeout(() => {
+      isMovingRef.current = false;
+      setFlight(null);
+      setMovingDisk(null);
+    }, reducedMotion ? 40 : 560);
+    return () => window.clearTimeout(finish);
+  }, [flight]);
+
   const initGame = (disks: number) => {
+    isMovingRef.current = false;
     setNumDisks(disks);
-    const initialPeg = Array.from({ length: disks }, (_, i) => disks - i);
-    setPegs([initialPeg, [], []]);
+    setPegs(createHanoiPegs(disks));
     setSelectedPegIndex(null);
     setMoveCount(0);
     setElapsedSeconds(0);
     setIsTimerRunning(false);
     setIsWon(false);
-    setErrorMsg('');
-    setSuccessMsg('');
+    setFlight(null);
+    setMovingDisk(null);
+    setPlayMessage(null);
+    validation.clearMessage();
   };
 
-  const handlePegClick = (pegIdx: number) => {
-    if (isWon) return;
-
-    if (!isTimerRunning && moveCount === 0) {
-      setIsTimerRunning(true);
-    }
+  const handlePegClick = (pegIndex: number) => {
+    if (isWon || isMovingRef.current) return;
 
     if (selectedPegIndex === null) {
-      // Seleccionar peg si no está vacío
-      if (pegs[pegIdx].length > 0) {
-        setSelectedPegIndex(pegIdx);
-      }
-    } else {
-      // Intentar mover de selectedPegIndex a pegIdx
-      if (selectedPegIndex === pegIdx) {
-        setSelectedPegIndex(null);
-        return;
-      }
-
-      const sourcePeg = [...pegs[selectedPegIndex]];
-      const targetPeg = [...pegs[pegIdx]];
-      const diskToMove = sourcePeg[sourcePeg.length - 1];
-      const topTargetDisk = targetPeg.length > 0 ? targetPeg[targetPeg.length - 1] : Infinity;
-
-      if (diskToMove < topTargetDisk) {
-        // Movimiento válido
-        sourcePeg.pop();
-        targetPeg.push(diskToMove);
-
-        const newPegs = [...pegs];
-        newPegs[selectedPegIndex] = sourcePeg;
-        newPegs[pegIdx] = targetPeg;
-
-        setPegs(newPegs);
-        setMoveCount((prev) => prev + 1);
-        setSelectedPegIndex(null);
-
-        // Comprobar victoria (todos los discos en Poste B o Poste C)
-        if (targetPeg.length === numDisks && pegIdx !== 0) {
-          setIsWon(true);
-          setIsTimerRunning(false);
-          setSuccessMsg(`¡Puzzle resuelto en ${moveCount + 1} movimientos! Solicita la clave a Adro.`);
-        }
-      } else {
-        // Movimiento inválido
-        setErrorMsg('¡Movimiento no permitido! No se puede poner un disco mayor sobre uno menor.');
-        setTimeout(() => setErrorMsg(''), 3000);
-        setSelectedPegIndex(null);
-      }
-    }
-  };
-
-  const handleValidarPosta = () => {
-    if (!selectedEquipoId) {
-      setErrorMsg('Selecciona un equipo de 4 dígitos');
-      return;
-    }
-    const postaInfo = POSTAS.find((p) => p.id === 5);
-    if (pinInput !== postaInfo?.pin && pinInput !== MASTER_PIN) {
-      setErrorMsg('PIN de moderador incorrecto (PIN Posta 5: 1005)');
+      if (pegs[pegIndex].length === 0) return;
+      if (!isTimerRunning) setIsTimerRunning(true);
+      setSelectedPegIndex(pegIndex);
+      setPlayMessage(null);
       return;
     }
 
-    const res = completarPostaEquipo(selectedEquipoId, 5, 100, elapsedSeconds, `Hanoi ${numDisks} discos en ${moveCount} movs`);
-    if (res) {
-      setSuccessMsg(`¡Posta 5 completada con éxito para el Equipo ${selectedEquipoId}!`);
-      setErrorMsg('');
-      setPinInput('');
-    } else {
-      setErrorMsg('Error al guardar progreso');
+    if (selectedPegIndex === pegIndex) {
+      setSelectedPegIndex(null);
+      return;
+    }
+
+    const sourcePeg = pegs[selectedPegIndex];
+    const diskToMove = sourcePeg[sourcePeg.length - 1];
+    const nextPegs = moveDisk(pegs, selectedPegIndex, pegIndex);
+
+    if (!nextPegs || diskToMove === undefined) {
+      setSelectedPegIndex(null);
+      setPlayMessage({ type: 'error', text: 'Movimiento no permitido: un disco grande no puede ir sobre uno pequeño.' });
+      return;
+    }
+
+    isMovingRef.current = true;
+    setPegs(nextPegs);
+    setMoveCount((value) => value + 1);
+    setSelectedPegIndex(null);
+    setPlayMessage(null);
+    setMovingDisk({
+      size: diskToMove,
+      from: selectedPegIndex,
+      to: pegIndex,
+      fromRect: snapshotRect(diskRefs.current[diskKey(selectedPegIndex, diskToMove)]),
+      token: animationTokenRef.current + 1
+    });
+    animationTokenRef.current += 1;
+
+    if (isHanoiSolved(nextPegs, numDisks)) {
+      setIsWon(true);
+      setIsTimerRunning(false);
+      setPlayMessage({ type: 'success', text: 'Torre completada. Solicita la validación del encargado.' });
     }
   };
 
-  const minMoves = Math.pow(2, numDisks) - 1;
+  const minMoves = 2 ** numDisks - 1;
 
   return (
-    <div className="w-full max-w-5xl mx-auto p-4 sm:p-6 space-y-6">
-      
-      {/* Banner */}
-      <div className="glass-panel p-6 rounded-2xl relative overflow-hidden border-emerald-500/30">
-        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono">
-                POSTA 05
-              </span>
-              <span className="text-xs text-slate-400 font-mono">Encargado: Adro</span>
-            </div>
-            <h2 className="text-3xl font-extrabold text-white">
-              Juegos Lógicos <span>(Torre de Hanoi)</span>
-            </h2>
-            <p className="text-sm text-slate-300">
-              Desplaza la torre de discos hacia otro poste respetando las reglas de tamaño.
-            </p>
-          </div>
-
-          {/* Stats Bar */}
-          <div className="flex items-center gap-4 bg-slate-900/90 p-3 rounded-xl border border-slate-800">
-            <div className="text-center px-2">
-              <span className="text-[10px] text-slate-400 font-mono uppercase block">Movimientos</span>
-              <span className="text-2xl font-bold font-mono text-emerald-400">
-                {moveCount} <span className="text-xs text-slate-500">/ Mín {minMoves}</span>
-              </span>
-            </div>
-            <div className="h-8 w-px bg-slate-800"></div>
-            <div className="text-center px-2">
-              <span className="text-[10px] text-slate-400 font-mono uppercase block">Tiempo</span>
-              <span className="text-2xl font-bold font-mono text-cyan-400">
-                {Math.floor(elapsedSeconds / 60)}:{(elapsedSeconds % 60).toString().padStart(2, '0')}
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Disks Selector & Reset */}
-      <div className="flex flex-wrap items-center justify-between gap-3 glass-panel p-4 rounded-xl">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-bold text-slate-300">Dificultad (Discos):</span>
-          {[3, 4, 5].map((d) => (
-            <button
-              key={d}
-              onClick={() => initGame(d)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                numDisks === d
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                  : 'bg-slate-800 text-slate-400 hover:text-white'
-              }`}
-            >
-              {d} Discos
+    <GameShell posta={validation.posta} onReset={() => initGame(numDisks)} resetLabel="Reiniciar">
+      <div className="game-toolbar game-toolbar--compact">
+        <div className="toolbar-group">
+          <span className="toolbar-label"><CircleDot aria-hidden="true" /> Discos</span>
+          {[3, 4, 5].map((disks) => (
+            <button type="button" key={disks} className={`control-button control-button--compact ${numDisks === disks ? 'control-button--primary' : ''}`} aria-pressed={numDisks === disks} onClick={() => initGame(disks)}>
+              {disks}
             </button>
           ))}
         </div>
-
-        <button
-          onClick={() => initGame(numDisks)}
-          className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 rounded-lg flex items-center gap-1.5 border border-slate-700"
-        >
-          <RotateCcw className="w-3.5 h-3.5" /> Reiniciar Torre
-        </button>
+        <div className="game-toolbar__stats" aria-label="Estado de la partida">
+          <span><b>{moveCount}</b> movimientos</span>
+          <span><b>{formatTime(elapsedSeconds)}</b> tiempo</span>
+          <span><b>{minMoves}</b> mínimo</span>
+        </div>
       </div>
 
-      {/* Interactive Hanoi Canvas Pegs */}
-      <div className="glass-panel p-8 rounded-2xl border-emerald-500/20 space-y-6">
-        
-        {isWon && (
-          <div className="p-4 bg-emerald-500/20 border border-emerald-500/40 rounded-xl text-center space-y-1 animate-bounce">
-            <Trophy className="w-8 h-8 text-ucb-gold mx-auto" />
-            <h3 className="text-lg font-bold text-emerald-300">¡FELICIDADES! ¡TORRE COMPLETADA!</h3>
-            <p className="text-xs text-slate-200">Logrado en {moveCount} movimientos y {elapsedSeconds} segundos.</p>
+      <section className="game-panel game-panel--focus hanoi-panel" aria-labelledby="hanoi-title">
+        <div className="game-panel__header game-panel__header--split">
+          <div>
+            <span className="eyebrow">Lógica / selección por turnos</span>
+            <h2 id="hanoi-title">Lleva todos los discos a la Torre 3</h2>
           </div>
-        )}
+          <span className={`game-state ${isWon ? 'game-state--success' : 'game-state--active'}`} aria-live="polite">
+            <i aria-hidden="true" /> {isWon ? 'Completado' : selectedPegIndex === null ? 'Selecciona una torre' : 'Elige el destino'}
+          </span>
+        </div>
 
-        <div className="grid grid-cols-3 gap-4 h-64 items-end relative pt-10">
-          
-          {pegs.map((peg, pegIdx) => {
-            const isSelected = selectedPegIndex === pegIdx;
-            
+        {playMessage && <p className={`feedback feedback--${playMessage.type}`} aria-live="polite"><span aria-hidden="true">{playMessage.type === 'success' ? <Trophy /> : <CircleDot />}</span>{playMessage.text}</p>}
+
+        <div className="hanoi-board" aria-label="Tablero de Torre de Hanoi">
+          {pegs.map((peg, pegIndex) => {
+            const renderedPeg = getHanoiRenderOrder(peg);
+            const topDisk = peg[peg.length - 1];
             return (
-              <div
-                key={pegIdx}
-                onClick={() => handlePegClick(pegIdx)}
-                className={`relative h-full flex flex-col justify-end items-center rounded-xl p-2 cursor-pointer transition-all ${
-                  isSelected ? 'bg-emerald-500/10 border-2 border-emerald-400/80 shadow-lg shadow-emerald-500/20' : 'bg-slate-900/40 hover:bg-slate-900/80 border border-slate-800'
-                }`}
+              <button
+                type="button"
+                className={`hanoi-peg ${selectedPegIndex === pegIndex ? 'hanoi-peg--selected' : ''}`}
+                key={pegIndex}
+                aria-pressed={selectedPegIndex === pegIndex}
+                aria-label={`${selectedPegIndex === null ? 'Seleccionar' : 'Mover al'} ${pegName(pegIndex)}`}
+                onClick={() => handlePegClick(pegIndex)}
               >
-                {/* Vertical Wooden Pole */}
-                <div className="absolute bottom-4 w-3 bg-slate-700 rounded-t-md h-44 shadow-inner pointer-events-none -z-0"></div>
-                
-                {/* Base Platform */}
-                <div className="w-full h-4 bg-slate-800 rounded-lg z-10 flex items-center justify-center">
-                  <span className="text-[10px] font-mono text-slate-400 uppercase">
-                    Poste {String.fromCharCode(65 + pegIdx)}
+                <span className="hanoi-peg__label">{pegName(pegIndex)}</span>
+                <span className="hanoi-peg__rod" aria-hidden="true" />
+                {renderedPeg.map((diskSize) => (
+                  <span
+                    className={`hanoi-disk ${movingDisk?.to === pegIndex && movingDisk.size === diskSize && topDisk === diskSize ? 'hanoi-disk--arriving' : ''}`}
+                    key={diskSize}
+                    ref={(element) => { diskRefs.current[diskKey(pegIndex, diskSize)] = element; }}
+                    style={{ width: `${35 + (diskSize / numDisks) * 60}%`, '--disk-color': DISK_COLORS[(diskSize - 1) % DISK_COLORS.length] } as React.CSSProperties}
+                    aria-hidden="true"
+                  >
+                    {diskSize}
                   </span>
-                </div>
-
-                {/* Disks stacked bottom-up */}
-                <div className="w-full flex flex-col-reverse items-center gap-1 z-10 mb-4 pointer-events-none">
-                  {peg.map((diskSize) => {
-                    const widthPercent = 35 + (diskSize / numDisks) * 60;
-                    const colors = [
-                      'bg-emerald-400 shadow-emerald-400/50',
-                      'bg-cyan-400 shadow-cyan-400/50',
-                      'bg-amber-400 shadow-amber-400/50',
-                      'bg-purple-400 shadow-purple-400/50',
-                      'bg-rose-400 shadow-rose-400/50'
-                    ];
-                    const diskColor = colors[(diskSize - 1) % colors.length];
-
-                    return (
-                      <div
-                        key={diskSize}
-                        style={{ width: `${widthPercent}%` }}
-                        className={`h-7 rounded-lg ${diskColor} shadow-md flex items-center justify-center font-bold text-slate-950 text-xs font-mono border border-white/20 transition-all`}
-                      >
-                        {diskSize}
-                      </div>
-                    );
-                  })}
-                </div>
-
-              </div>
+                ))}
+              </button>
             );
           })}
-
+          {flight && (
+            <span
+              className="hanoi-moving-disk"
+              key={flight.token}
+              style={{
+                '--from-left': `${flight.fromRect?.left ?? flight.toRect.left}px`,
+                '--from-top': `${flight.fromRect?.top ?? flight.toRect.top}px`,
+                '--to-left': `${flight.toRect.left}px`,
+                '--to-top': `${flight.toRect.top}px`,
+                '--lift-top': `${Math.max(8, Math.min(flight.fromRect?.top ?? flight.toRect.top, flight.toRect.top) - Math.max(72, flight.toRect.height * 3))}px`,
+                width: `${flight.fromRect?.width ?? flight.toRect.width}px`,
+                height: `${flight.fromRect?.height ?? flight.toRect.height}px`,
+                '--disk-color': DISK_COLORS[(flight.size - 1) % DISK_COLORS.length]
+              } as React.CSSProperties}
+              aria-hidden="true"
+            >
+              {flight.size}
+            </span>
+          )}
         </div>
-        <p className="text-center text-xs text-slate-400 font-mono">
-          {selectedPegIndex === null ? 'Haz clic en un poste para tomar el disco superior' : `Disco tomado del Poste ${String.fromCharCode(65 + selectedPegIndex)}. Haz clic en el poste destino.`}
-        </p>
-      </div>
 
-      {/* Moderator Form */}
-      <div className="glass-panel p-5 rounded-xl border-emerald-500/20 space-y-3">
-        <h3 className="text-sm font-bold text-white flex items-center gap-2">
-          <ShieldCheck className="w-4 h-4 text-emerald-400" />
-          Aprobación por Adro (PIN: 1005)
-        </h3>
-
-        {errorMsg && <p className="text-xs text-rose-400 bg-rose-500/10 p-2 rounded">{errorMsg}</p>}
-        {successMsg && <p className="text-xs text-emerald-400 bg-emerald-500/10 p-2 rounded">{successMsg}</p>}
-
-        <div className="flex flex-wrap items-center gap-3">
-          <select
-            value={selectedEquipoId}
-            onChange={(e) => setSelectedEquipoId(e.target.value)}
-            className="flex-1 bg-slate-900 border border-slate-700 text-white text-xs rounded-lg p-2.5 font-mono"
-          >
-            <option value="">-- Seleccionar Equipo (ID 4 Dígitos) --</option>
-            {equipos.map((eq) => (
-              <option key={eq.id} value={eq.id}>
-                [{eq.id}] {eq.nombre}
-              </option>
-            ))}
-          </select>
-
-          <input
-            type="password"
-            placeholder="PIN (1005)"
-            value={pinInput}
-            onChange={(e) => setPinInput(e.target.value)}
-            className="w-36 bg-slate-900 border border-slate-700 text-white text-xs rounded-lg p-2.5 font-mono text-center"
-          />
-
-          <button
-            onClick={handleValidarPosta}
-            className="px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-bold text-xs rounded-lg hover:brightness-110 shadow-md shadow-emerald-500/20"
-          >
-            Validar Posta 5
-          </button>
+        <div className="hanoi-instruction" aria-live="polite">
+          <span>{selectedPegIndex === null ? 'Selecciona la torre que contiene el disco superior que quieres mover.' : `Disco seleccionado en ${pegName(selectedPegIndex)}. Elige una torre destino.`}</span>
+          <small>Un disco grande nunca puede ir sobre uno pequeño.</small>
         </div>
-      </div>
+      </section>
 
-    </div>
+      <TeamValidationPanel
+        posta={validation.posta}
+        equipos={validation.equipos}
+        selectedTeamId={validation.selectedTeamId}
+        onTeamChange={validation.setSelectedTeamId}
+        pin={validation.pin}
+        onPinChange={validation.setPin}
+        onValidate={() => validation.validate(100, elapsedSeconds, `Hanoi ${numDisks} discos en ${moveCount} movimientos`)}
+        isLoading={validation.isLoading}
+        isValidating={validation.isValidating}
+        source={validation.source}
+        connectionError={validation.error}
+        message={validation.message}
+        disabled={!isWon || Boolean(flight)}
+      />
+    </GameShell>
   );
 };
