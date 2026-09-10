@@ -1,325 +1,378 @@
-import React, { useState, useEffect } from 'react';
-import { ShieldCheck, Lock, Unlock, Plus, RefreshCw, CheckCircle2, Circle, AlertCircle, Trash2, KeyRound } from 'lucide-react';
-import { POSTAS, MASTER_PIN, getSiguientePosta, getPostasCompletadasCount } from '../utils/routing';
-import { getEquipos, completarPostaEquipo, resetearEquipo, resetearTodoElEvento, registrarOCrearEquipo, subscribeToChanges } from '../utils/storage';
+import React, { useEffect, useMemo, useState } from 'react';
+import { CheckCircle2, FileUp, KeyRound, LogOut, Pencil, Plus, RefreshCw, RotateCcw, ShieldCheck, ToggleLeft, ToggleRight, Upload, Users, X } from 'lucide-react';
+import { useEventTeams } from '../hooks/useEventTeams';
+import { createRemoteTeam, loginOperator, logoutOperator, updateRemoteTeam } from '../lib/team-api';
+import { Modal } from './ui/Modal';
+import { POSTAS, getPostasCompletadasCount, getSiguientePosta } from '../utils/routing';
+import { generateAvailableTeamId } from '../utils/team-id';
+import { actualizarDatosEquipo, completarPostaEquipo, registrarOCrearEquipo, resetearEquipo, resetearTodoElEvento } from '../utils/storage';
 import type { Equipo, PostaId } from '../types/game';
+
+type StatusMessage = { type: 'success' | 'error' | 'warning'; text: string } | null;
+
+const parseMembers = (value: string) => value.split(/[\n,;]+/).map((member) => member.trim()).filter(Boolean).slice(0, 20);
+
+function splitCsvLine(line: string): string[] {
+  const values: string[] = [];
+  let current = '';
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (character === '"' && line[index + 1] === '"' && quoted) {
+      current += '"';
+      index += 1;
+    } else if (character === '"') {
+      quoted = !quoted;
+    } else if (character === ',' && !quoted) {
+      values.push(current.trim());
+      current = '';
+    } else {
+      current += character;
+    }
+  }
+  values.push(current.trim());
+  return values;
+}
 
 export const ModeratorPanel: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authPin, setAuthPin] = useState('');
-  const [equipos, setEquipos] = useState<Equipo[]>(getEquipos());
-  const [searchId, setSearchId] = useState('');
-  const [nuevoEquipoId, setNuevoEquipoId] = useState('');
-  const [nuevoEquipoNombre, setNuevoEquipoNombre] = useState('');
-  const [selectedEquipoId, setSelectedEquipoId] = useState('');
-  const [selectedPostaId, setSelectedPostaId] = useState<PostaId>(1);
-  const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [status, setStatus] = useState<StatusMessage>(null);
+  const [search, setSearch] = useState('');
+  const [newId, setNewId] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newMembers, setNewMembers] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editMembers, setEditMembers] = useState<string[]>([]);
+  const [memberDraft, setMemberDraft] = useState('');
+  const [editStatus, setEditStatus] = useState<StatusMessage>(null);
+  const [csvLoading, setCsvLoading] = useState(false);
+  const [quickTeamId, setQuickTeamId] = useState('');
+  const [quickPostaId, setQuickPostaId] = useState<PostaId>(1);
+  const { equipos, source, isLoading, error, refresh } = useEventTeams({ includeInactive: isAuthenticated });
 
   useEffect(() => {
-    const unsub = subscribeToChanges(() => {
-      setEquipos(getEquipos());
-    });
-    return () => unsub();
+    fetch('/api/operator', { headers: { Accept: 'application/json' } })
+      .then((response) => response.json())
+      .then((data) => {
+        if (data?.authenticated) setIsAuthenticated(true);
+      })
+      .catch(() => undefined);
   }, []);
 
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (authPin === MASTER_PIN || POSTAS.some((p) => p.pin === authPin)) {
+  const generatedId = useMemo(() => generateAvailableTeamId(equipos.map((team) => team.id)), [equipos]);
+
+  useEffect(() => {
+    setNewId((current) => {
+      if (current && !equipos.some((team) => team.id === current)) return current;
+      return generatedId ?? '';
+    });
+  }, [equipos, generatedId]);
+
+  const filteredTeams = useMemo(() => {
+    const query = search.toLowerCase().trim();
+    return equipos.filter((team) => !query || team.id.includes(query) || team.nombre.toLowerCase().includes(query));
+  }, [equipos, search]);
+
+  const activeCount = equipos.filter((team) => team.active).length;
+  const inactiveCount = equipos.length - activeCount;
+  const editingTeam = editingId ? equipos.find((team) => team.id === editingId) ?? null : null;
+
+  const handleLogin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setAuthLoading(true);
+    setStatus(null);
+    const result = await loginOperator(authPin);
+    if (result.ok) {
       setIsAuthenticated(true);
-      setStatusMsg(null);
+      setAuthPin('');
+      setStatus({ type: 'success', text: 'Sesión iniciada. La administración usará el PIN único del operador.' });
     } else {
-      setStatusMsg({ type: 'error', text: 'PIN de acceso incorrecto. Usa ADMIN2026 o el PIN de tu posta.' });
+      setStatus({ type: result.unavailable ? 'warning' : 'error', text: result.message ?? 'No se pudo iniciar la sesión de operador.' });
     }
+    setAuthLoading(false);
   };
 
-  const handleCrearEquipo = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!nuevoEquipoId || nuevoEquipoId.length !== 4 || !/^\d{4}$/.test(nuevoEquipoId)) {
-      setStatusMsg({ type: 'error', text: 'El ID del equipo debe ser un número de 4 dígitos (ej: 1462, 6462)' });
+  const handleLogout = async () => {
+    await logoutOperator();
+    setIsAuthenticated(false);
+    setEditingId(null);
+    setStatus(null);
+  };
+
+  const reserveNextId = (usedId: string) => {
+    setNewId(generateAvailableTeamId([...equipos.map((team) => team.id), usedId]) ?? '');
+  };
+
+  const createTeam = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const id = newId.trim();
+    const name = newName.trim() || `Equipo ${id}`;
+    const members = parseMembers(newMembers);
+    if (!/^\d{4}$/.test(id)) {
+      setStatus({ type: 'error', text: 'No hay un ID disponible para asignar. Actualiza el catálogo e inténtalo de nuevo.' });
+      return;
+    }
+    if (equipos.some((team) => team.id === id)) {
+      setStatus({ type: 'error', text: `El ID ${id} ya está ocupado. Se generará uno nuevo.` });
+      reserveNextId(id);
+      return;
+    }
+    if (name.length < 2) {
+      setStatus({ type: 'error', text: 'El nombre del equipo debe tener al menos 2 caracteres.' });
       return;
     }
 
-    const eq = registrarOCrearEquipo(nuevoEquipoId, nuevoEquipoNombre || `Equipo ${nuevoEquipoId}`);
-    setNuevoEquipoId('');
-    setNuevoEquipoNombre('');
-    setStatusMsg({ type: 'success', text: `Equipo [${eq.id}] registrado exitosamente.` });
+    try {
+      const created = await createRemoteTeam({ id, name, members, active: true });
+      registrarOCrearEquipo(created.id, created.name, created.members);
+      setStatus({ type: 'success', text: `Equipo ${created.id} registrado y sincronizado.` });
+      reserveNextId(created.id);
+      await refresh();
+    } catch (remoteError) {
+      const localTeam = registrarOCrearEquipo(id, name, members);
+      setStatus({ type: 'warning', text: `${localTeam.nombre} quedó guardado localmente porque Supabase no respondió. ${remoteError instanceof Error ? remoteError.message : ''}` });
+      reserveNextId(id);
+    }
+
+    setNewName('');
+    setNewMembers('');
   };
 
-  const handleAprobarPosta = (equipoId: string, postaId: PostaId) => {
-    const res = completarPostaEquipo(equipoId, postaId, 100, 0, 'Aprobado manualmente desde Panel Moderador');
-    if (res) {
-      setStatusMsg({ type: 'success', text: `Posta ${postaId} marcada como completada para el Equipo ${equipoId}` });
+  const startEdit = (team: Equipo) => {
+    setEditingId(team.id);
+    setEditName(team.nombre);
+    setEditMembers(team.members);
+    setMemberDraft('');
+    setEditStatus(null);
+    setStatus(null);
+  };
+
+  const addMembers = (event?: React.FormEvent) => {
+    event?.preventDefault();
+    const additions = parseMembers(memberDraft);
+    if (!additions.length) return;
+    setEditMembers((current) => {
+      const known = new Set(current.map((member) => member.toLocaleLowerCase()));
+      return [...current, ...additions.filter((member) => !known.has(member.toLocaleLowerCase()))].slice(0, 20);
+    });
+    setMemberDraft('');
+  };
+
+  const saveEdit = async (teamId: string) => {
+    const name = editName.trim();
+    if (name.length < 2) {
+      setEditStatus({ type: 'error', text: 'El nombre del equipo debe tener al menos 2 caracteres.' });
+      return;
+    }
+    actualizarDatosEquipo(teamId, { nombre: name, members: editMembers });
+    try {
+      const updated = await updateRemoteTeam(teamId, { name, members: editMembers });
+      setStatus({ type: 'success', text: `Equipo ${updated.id} actualizado y sincronizado.` });
+      await refresh();
+    } catch (remoteError) {
+      setStatus({ type: 'warning', text: `Cambios de ${teamId} guardados localmente. ${remoteError instanceof Error ? remoteError.message : ''}` });
+    }
+    setEditingId(null);
+  };
+
+  const toggleTeam = async (team: Equipo) => {
+    const nextActive = !team.active;
+    actualizarDatosEquipo(team.id, { active: nextActive });
+    try {
+      await updateRemoteTeam(team.id, { active: nextActive });
+      setStatus({ type: 'success', text: `${team.id} ${nextActive ? 'activado' : 'desactivado'} en Supabase.` });
+      await refresh();
+    } catch (remoteError) {
+      setStatus({ type: 'warning', text: `Estado de ${team.id} cambiado localmente. ${remoteError instanceof Error ? remoteError.message : ''}` });
     }
   };
 
-  const handleResetEquipo = (equipoId: string) => {
-    if (confirm(`¿Estás seguro de reiniciar el progreso del equipo ${equipoId}?`)) {
-      resetearEquipo(equipoId);
-      setStatusMsg({ type: 'success', text: `Progreso del equipo ${equipoId} reiniciado.` });
+  const importCsv = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setCsvLoading(true);
+    const lines = (await file.text()).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const startIndex = lines[0]?.toLowerCase().includes('id') ? 1 : 0;
+    let imported = 0;
+    let skipped = 0;
+    let remoteFailures = 0;
+    const knownIds = new Set(equipos.map((team) => team.id));
+
+    for (const line of lines.slice(startIndex)) {
+      const [idRaw, nameRaw, membersRaw = ''] = splitCsvLine(line);
+      const id = idRaw.trim();
+      const name = nameRaw.trim();
+      if (!/^\d{4}$/.test(id) || name.length < 2 || knownIds.has(id)) {
+        skipped += 1;
+        continue;
+      }
+
+      const members = parseMembers(membersRaw);
+      try {
+        const created = await createRemoteTeam({ id, name, members, active: true });
+        registrarOCrearEquipo(created.id, created.name, created.members);
+        knownIds.add(id);
+        knownIds.add(created.id);
+      } catch {
+        registrarOCrearEquipo(id, name, members);
+        knownIds.add(id);
+        remoteFailures += 1;
+      }
+      imported += 1;
     }
+
+    await refresh();
+    setCsvLoading(false);
+    setStatus({ type: remoteFailures || !imported ? 'warning' : 'success', text: `Importación terminada: ${imported} equipo(s) agregado(s), ${skipped} fila(s) omitida(s).${remoteFailures ? ` ${remoteFailures} quedó local por falta de conexión.` : ''}` });
   };
 
-  const handleResetAll = () => {
-    if (confirm('⚠️ ATENCIÓN: ¿Deseas reiniciar TODOS los datos de la competencia?')) {
-      resetearTodoElEvento();
-      setStatusMsg({ type: 'success', text: 'Todos los datos del evento han sido reiniciados.' });
+  const quickApprove = () => {
+    if (!quickTeamId) {
+      setStatus({ type: 'error', text: 'Selecciona un equipo para la validación rápida.' });
+      return;
     }
+    completarPostaEquipo(quickTeamId, quickPostaId, 100, 0, 'Aprobado desde panel de operador');
+    setStatus({ type: 'success', text: `Posta ${quickPostaId} marcada como completada para ${quickTeamId}.` });
   };
 
-  const filteredEquipos = equipos.filter((eq) =>
-    eq.id.includes(searchId) || eq.nombre.toLowerCase().includes(searchId.toLowerCase())
-  );
+  const resetTeam = (teamId: string) => {
+    if (!window.confirm(`¿Reiniciar solamente el progreso de ${teamId}?`)) return;
+    resetearEquipo(teamId);
+    setStatus({ type: 'success', text: `Progreso de ${teamId} reiniciado. El registro del equipo se conservó.` });
+  };
+
+  const resetAll = () => {
+    if (!window.confirm('¿Reiniciar el progreso de todos los equipos? Los nombres e integrantes se conservarán.')) return;
+    resetearTodoElEvento();
+    setStatus({ type: 'success', text: 'Progreso del evento reiniciado.' });
+  };
 
   if (!isAuthenticated) {
     return (
-      <div className="w-full max-w-md mx-auto p-4 sm:p-6 mt-12">
-        <div className="glass-panel p-8 rounded-2xl border-emerald-500/30 text-center space-y-6 shadow-2xl">
-          <div className="w-16 h-16 rounded-2xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto border border-emerald-500/40">
-            <Lock className="w-8 h-8" />
+      <section className="page-stack page-stack--narrow" aria-labelledby="operator-login-title">
+        <div className="page-intro page-intro--compact">
+          <div className="page-intro__copy">
+            <span className="eyebrow">04 / ACCESO DE OPERADOR</span>
+            <h1 id="operator-login-title" className="page-title">Control de equipos</h1>
+            <p>Ingresa el PIN único del operador para administrar el catálogo.</p>
           </div>
-          
-          <div>
-            <h2 className="text-2xl font-extrabold text-white">Panel de Moderador</h2>
-            <p className="text-xs text-slate-400 mt-1">Ingresa el PIN de tu posta o el Master PIN para acceder.</p>
-          </div>
-
-          {statusMsg && (
-            <div className={`p-3 rounded-lg text-xs font-medium ${statusMsg.type === 'error' ? 'bg-rose-500/10 text-rose-300 border border-rose-500/30' : 'bg-emerald-500/10 text-emerald-300'}`}>
-              {statusMsg.text}
-            </div>
-          )}
-
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <input
-                type="password"
-                placeholder="Ingresar PIN (ej. ADMIN2026)"
-                value={authPin}
-                onChange={(e) => setAuthPin(e.target.value)}
-                className="w-full p-3 bg-slate-900 border border-slate-700 rounded-xl text-center text-lg font-mono text-white tracking-widest outline-none focus:border-emerald-400"
-                autoFocus
-              />
-            </div>
-            <button
-              type="submit"
-              className="w-full py-3 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-sm rounded-xl shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center gap-2"
-            >
-              <KeyRound className="w-4 h-4" /> Desbloquear Panel
-            </button>
-          </form>
         </div>
-      </div>
+        <section className="page-panel auth-card">
+          <div className="auth-card__icon"><ShieldCheck aria-hidden="true" /></div>
+          <h2>Desbloquear operación</h2>
+          <p>La sesión se valida exclusivamente en el servidor.</p>
+          {status && <p className={`inline-notice inline-notice--${status.type}`} role="alert">{status.text}</p>}
+          <form className="auth-form" onSubmit={handleLogin}>
+            <label className="field-group"><span className="field-label">PIN de operador</span><span className="field-with-icon"><KeyRound aria-hidden="true" /><input className="field-control" type="password" value={authPin} onChange={(event) => setAuthPin(event.target.value)} autoComplete="off" autoFocus placeholder="Ingresa el PIN" /></span></label>
+            <button className="button button-primary" type="submit" disabled={authLoading || !authPin}>{authLoading ? 'Validando…' : 'Desbloquear panel'} <ArrowIcon /></button>
+          </form>
+        </section>
+      </section>
     );
   }
 
   return (
-    <div className="w-full max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
-      
-      {/* Header */}
-      <div className="glass-panel p-6 rounded-2xl border-emerald-500/30 flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-mono">
-              MODERACIÓN ACTIVA
-            </span>
-          </div>
-          <h2 className="text-2xl font-extrabold text-white mt-1">
-            Control de <span>Postas y Equipos</span>
-          </h2>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleResetAll}
-            className="px-3 py-2 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-rose-500/30 transition-all"
-          >
-            <Trash2 className="w-4 h-4" /> Resetear Todo
-          </button>
-          <button
-            onClick={() => setIsAuthenticated(false)}
-            className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium flex items-center gap-1 border border-slate-700"
-          >
-            <Unlock className="w-4 h-4" /> Salir
-          </button>
-        </div>
+    <section className="page-stack moderator-page" aria-labelledby="operator-title">
+      <div className="page-intro page-intro--compact">
+        <div className="page-intro__copy"><span className="eyebrow">04 / OPERACIÓN DE EVENTO</span><h1 id="operator-title" className="page-title">Equipos</h1><p>Registra y mantén listo el catálogo que utilizarán las Postas.</p></div>
+        <div className="page-intro__actions"><span className={`data-status ${source === 'supabase' ? 'data-status--online' : ''}`}><i aria-hidden="true" />{isLoading ? 'Cargando catálogo' : source === 'supabase' ? 'Sincronizado' : 'Respaldo local'}</span><button type="button" className="control-button" onClick={() => void handleLogout()}><LogOut aria-hidden="true" /> Salir</button></div>
       </div>
 
-      {statusMsg && (
-        <div className={`p-4 rounded-xl text-xs font-bold ${statusMsg.type === 'error' ? 'bg-rose-500/10 text-rose-300 border border-rose-500/30' : 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30'}`}>
-          {statusMsg.text}
-        </div>
-      )}
+      {status && <p className={`inline-notice inline-notice--${status.type}`} role="status">{status.text}</p>}
+      {error && <p className="inline-notice inline-notice--warning">{error}</p>}
 
-      {/* Quick Register Team & Search */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        
-        {/* Register 4-digit Team */}
-        <div className="glass-panel p-5 rounded-xl space-y-3 border-slate-800">
-          <h3 className="text-sm font-bold text-white flex items-center gap-2">
-            <Plus className="w-4 h-4 text-emerald-400" /> Registrar Nuevo Equipo (ID 4 Dígitos)
-          </h3>
-          <form onSubmit={handleCrearEquipo} className="flex gap-2">
-            <input
-              type="text"
-              placeholder="ID (ej: 1462)"
-              maxLength={4}
-              value={nuevoEquipoId}
-              onChange={(e) => setNuevoEquipoId(e.target.value)}
-              className="w-28 bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs font-mono text-center text-white outline-none focus:border-emerald-400"
-            />
-            <input
-              type="text"
-              placeholder="Nombre Opcional (ej: Cyber-Devs)"
-              value={nuevoEquipoNombre}
-              onChange={(e) => setNuevoEquipoNombre(e.target.value)}
-              className="flex-1 bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white outline-none focus:border-emerald-400"
-            />
-            <button
-              type="submit"
-              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-lg transition-all"
-            >
-              Registrar
-            </button>
+      <div className="moderator-layout">
+        <aside className="moderator-tools page-stack" aria-label="Acciones de equipos">
+          <section className="admin-panel">
+            <div className="panel-heading"><div><span className="eyebrow">Alta manual</span><h2>Nuevo equipo</h2></div><Plus aria-hidden="true" color="var(--color-primary)" /></div>
+            <form className="admin-form" onSubmit={createTeam}>
+              <label className="field-group"><span className="field-label">ID asignado · 4 dígitos</span><input className="field-control field-control--readonly" inputMode="numeric" value={newId} readOnly aria-readonly="true" placeholder="Generando…" /><span className="field-help">Se genera automáticamente y no se puede editar.</span></label>
+              <label className="field-group"><span className="field-label">Nombre del equipo</span><input className="field-control" value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Nombre del equipo" required /></label>
+              <label className="field-group"><span className="field-label">Integrantes <span className="field-label__optional">opcional</span></span><textarea className="field-control field-control--small" value={newMembers} onChange={(event) => setNewMembers(event.target.value)} placeholder="Un nombre por línea" rows={3} /></label>
+              <button type="submit" className="button button-primary" disabled={!newId}><Plus aria-hidden="true" /> Agregar equipo</button>
+              <span className="field-help">Separa integrantes con comas, punto y coma o saltos de línea.</span>
+            </form>
+          </section>
+
+          <section className="admin-panel admin-panel--import">
+            <div className="panel-heading"><div><span className="eyebrow">Desde Forms</span><h2>Importar CSV</h2></div><FileUp aria-hidden="true" color="var(--color-primary)" /></div>
+            <p className="panel-description">Columnas: <code>id,nombre,integrantes</code>.</p>
+            <label className="button button-secondary button-full" style={{ cursor: csvLoading ? 'wait' : 'pointer' }}><Upload aria-hidden="true" /> {csvLoading ? 'Importando…' : 'Seleccionar CSV'}<input className="sr-only" type="file" accept=".csv,text/csv" onChange={importCsv} disabled={csvLoading} /></label>
+          </section>
+
+          <details className="admin-details">
+            <summary><span><CheckCircle2 aria-hidden="true" /> Validar una posta</span><span aria-hidden="true">+</span></summary>
+            <div className="admin-details__body">
+              <label className="field-group"><span className="field-label">Equipo</span><select className="field-control" value={quickTeamId} onChange={(event) => setQuickTeamId(event.target.value)}><option value="">Selecciona un equipo activo</option>{equipos.filter((team) => team.active).map((team) => <option key={team.id} value={team.id}>{team.id} · {team.nombre}</option>)}</select></label>
+              <label className="field-group"><span className="field-label">Estación</span><select className="field-control" value={quickPostaId} onChange={(event) => setQuickPostaId(Number(event.target.value) as PostaId)}>{POSTAS.map((posta) => <option key={posta.id} value={posta.id}>Posta {posta.id} · {posta.titulo}</option>)}</select></label>
+              <button type="button" className="button button-secondary button-full" onClick={quickApprove}><CheckCircle2 aria-hidden="true" /> Marcar como lista</button>
+            </div>
+          </details>
+        </aside>
+
+        <section className="admin-panel admin-catalog" aria-labelledby="catalog-title">
+          <div className="admin-toolbar">
+            <div><span className="eyebrow">Catálogo</span><h2 id="catalog-title">Equipos <span className="mono-label">/ {equipos.length}</span></h2></div>
+            <div className="admin-toolbar__actions"><button type="button" className="control-button control-button--compact" onClick={() => void refresh()} disabled={isLoading}><RefreshCw aria-hidden="true" /> Actualizar</button><button type="button" className="control-button control-button--compact control-button--danger" onClick={resetAll}><RotateCcw aria-hidden="true" /> Reiniciar progreso</button></div>
+          </div>
+
+          <div className="admin-summary" aria-label="Resumen del catálogo"><span><b>{activeCount}</b> activos</span><span><b>{inactiveCount}</b> inactivos</span><span><b>{equipos.length}</b> total</span></div>
+          <label className="field-group admin-search"><span className="field-label">Buscar equipo</span><input className="field-control" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="ID o nombre" /></label>
+
+          <div className="team-list" aria-live="polite">
+            {filteredTeams.map((team) => {
+              const count = getPostasCompletadasCount(team);
+              const next = getSiguientePosta(team);
+              return (
+                <article className={`team-row ${team.active ? '' : 'team-row--inactive'}`} key={team.id}>
+                  <div className="team-row__main">
+                    <div className="team-row__identity"><span className="station-index">{team.id}</span><div><strong>{team.nombre}</strong><span>{team.members.length ? `${team.members.length} integrante${team.members.length === 1 ? '' : 's'}` : 'Sin integrantes'}</span></div></div>
+                    <div className="team-row__members">{team.members.length ? team.members.join(' · ') : <span className="field-help">Agrega integrantes al editar.</span>}</div>
+                    <div className="team-row__progress"><b>{count}/5</b><span>{next ? `Siguiente: ${next.titulo}` : 'Ruta completa'}</span></div>
+                    <span className={`status-badge ${team.active ? 'status-badge--active' : 'status-badge--inactive'}`}><i aria-hidden="true" />{team.active ? 'Activo' : 'Inactivo'}</span>
+                    <div className="team-row__actions">
+                      <button type="button" className="row-action" onClick={() => startEdit(team)}><Pencil aria-hidden="true" /> Editar</button>
+                      <button type="button" className="row-action" onClick={() => void toggleTeam(team)}>{team.active ? <ToggleLeft aria-hidden="true" /> : <ToggleRight aria-hidden="true" />} {team.active ? 'Desactivar' : 'Activar'}</button>
+                      <button type="button" className="row-action" onClick={() => resetTeam(team.id)}><RotateCcw aria-hidden="true" /> Reiniciar</button>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+          {!filteredTeams.length && <div className="empty-state"><Users aria-hidden="true" size={28} /><strong>{search ? 'No hay coincidencias' : 'Aún no hay equipos'}</strong><span>{search ? 'Prueba con otro ID o nombre.' : 'Registra uno manualmente o importa el CSV de Forms.'}</span></div>}
+        </section>
+      </div>
+
+      {editingTeam && (
+        <Modal open={Boolean(editingTeam)} onClose={() => setEditingId(null)} eyebrow={`CATÁLOGO / #${editingTeam.id}`} title="Editar equipo" titleId="edit-team-title" size="compact" closeLabel="Cerrar edición">
+          <form className="edit-team-form" onSubmit={(event) => { event.preventDefault(); void saveEdit(editingTeam.id); }}>
+            {editStatus && <p className={`inline-notice inline-notice--${editStatus.type}`} role="alert">{editStatus.text}</p>}
+            <label className="field-group"><span className="field-label">ID</span><input className="field-control field-control--readonly" value={editingTeam.id} readOnly /></label>
+            <label className="field-group"><span className="field-label">Nombre</span><input className="field-control" value={editName} onChange={(event) => setEditName(event.target.value)} /></label>
+            <div className="field-group">
+              <span className="field-label">Integrantes</span>
+              <div className="member-editor">
+                <div className="member-editor__list" aria-live="polite">
+                  {editMembers.length ? editMembers.map((member, index) => <span className="member-chip" key={`${member}-${index}`}>{member}<button type="button" onClick={() => setEditMembers((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Quitar a ${member}`}><X aria-hidden="true" /></button></span>) : <span className="field-help">Aún no hay integrantes.</span>}
+                </div>
+                <div className="member-editor__add">
+                  <input className="field-control" value={memberDraft} onChange={(event) => setMemberDraft(event.target.value)} placeholder="Nombre del integrante" onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addMembers(); } }} />
+                  <button type="button" className="button button-secondary" onClick={() => addMembers()}>Añadir</button>
+                </div>
+                <span className="field-help">Añade uno por uno; puedes quitar cualquier chip sin mover el resto de la pantalla.</span>
+              </div>
+            </div>
+            <div className="form-actions"><button type="submit" className="button button-primary">Guardar cambios</button><button type="button" className="button button-quiet" onClick={() => setEditingId(null)}>Cancelar</button></div>
           </form>
-        </div>
-
-        {/* Quick Approve Action */}
-        <div className="glass-panel p-5 rounded-xl space-y-3 border-slate-800">
-          <h3 className="text-sm font-bold text-white flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-ucb-gold" /> Validación Rápida de Posta
-          </h3>
-          <div className="flex gap-2">
-            <select
-              value={selectedEquipoId}
-              onChange={(e) => setSelectedEquipoId(e.target.value)}
-              className="flex-1 bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs font-mono text-white outline-none"
-            >
-              <option value="">-- Seleccionar Equipo --</option>
-              {equipos.map((e) => (
-                <option key={e.id} value={e.id}>
-                  [{e.id}] {e.nombre}
-                </option>
-              ))}
-            </select>
-
-            <select
-              value={selectedPostaId}
-              onChange={(e) => setSelectedPostaId(Number(e.target.value) as PostaId)}
-              className="w-32 bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs font-mono text-white outline-none"
-            >
-              {POSTAS.map((p) => (
-                <option key={p.id} value={p.id}>
-                  Posta {p.id}
-                </option>
-              ))}
-            </select>
-
-            <button
-              onClick={() => selectedEquipoId && handleAprobarPosta(selectedEquipoId, selectedPostaId)}
-              className="px-4 py-2 bg-gradient-to-r from-amber-500 to-ucb-gold text-slate-950 font-bold text-xs rounded-lg hover:brightness-110 transition-all"
-            >
-              Marcar OK
-            </button>
-          </div>
-        </div>
-
-      </div>
-
-      {/* Teams Progress Table */}
-      <div className="glass-panel p-6 rounded-2xl space-y-4 border-slate-800">
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-          <h3 className="text-base font-bold text-white flex items-center gap-2">
-            <span>Lista de Equipos Competidores</span>
-            <span className="text-xs font-mono text-slate-400 bg-slate-800 px-2.5 py-0.5 rounded-full">
-              {equipos.length} Equipos Total
-            </span>
-          </h3>
-
-          <input
-            type="text"
-            placeholder="Buscar por ID de 4 dígitos o nombre..."
-            value={searchId}
-            onChange={(e) => setSearchId(e.target.value)}
-            className="w-full sm:w-64 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono text-white outline-none focus:border-emerald-400"
-          />
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="border-b border-slate-800 text-slate-400 font-mono uppercase text-[10px]">
-                <th className="p-3">ID 4 Dígitos</th>
-                <th className="p-3">Nombre Equipo</th>
-                <th className="p-3">Siguiente Misión</th>
-                <th className="p-3 text-center">Progreso</th>
-                <th className="p-3 text-center">Postas (1 a 5)</th>
-                <th className="p-3 text-right">Acciones</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/60">
-              {filteredEquipos.map((eq) => {
-                const count = getPostasCompletadasCount(eq);
-                const siguiente = getSiguientePosta(eq);
-
-                return (
-                  <tr key={eq.id} className="hover:bg-slate-900/50 transition-colors">
-                    <td className="p-3 font-mono font-bold text-ucb-gold text-sm">
-                      {eq.id}
-                    </td>
-                    <td className="p-3 font-semibold text-white">
-                      {eq.nombre}
-                    </td>
-                    <td className="p-3">
-                      {siguiente ? (
-                        <span className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-cyan-500/10 text-cyan-300 border border-cyan-500/30">
-                          Posta {siguiente.id}: {siguiente.titulo}
-                        </span>
-                      ) : (
-                        <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                          🎉 100% COMPLETADO
-                        </span>
-                      )}
-                    </td>
-                    <td className="p-3 text-center">
-                      <span className="font-mono font-bold text-white">{count} / 5</span>
-                    </td>
-                    <td className="p-3">
-                      <div className="flex items-center justify-center gap-1.5">
-                        {POSTAS.map((p) => {
-                          const isDone = eq.progresos[p.id]?.estado === 'completado';
-                          return (
-                            <button
-                              key={p.id}
-                              title={`Posta ${p.id} - ${p.titulo} (${isDone ? 'Completado' : 'Pendiente'})`}
-                              onClick={() => handleAprobarPosta(eq.id, p.id)}
-                              className={`w-7 h-7 rounded-lg text-[10px] font-mono font-bold flex items-center justify-center transition-all ${
-                                isDone
-                                  ? 'bg-emerald-500 text-slate-950 shadow-sm shadow-emerald-500/30'
-                                  : 'bg-slate-800 text-slate-500 hover:bg-slate-700 hover:text-white border border-slate-700'
-                              }`}
-                            >
-                              P{p.id}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </td>
-                    <td className="p-3 text-right">
-                      <button
-                        onClick={() => handleResetEquipo(eq.id)}
-                        className="px-2.5 py-1 bg-slate-800 hover:bg-rose-500/20 hover:text-rose-300 text-slate-400 rounded-lg text-[11px] font-medium transition-colors"
-                      >
-                        Reset
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-    </div>
+        </Modal>
+      )}
+    </section>
   );
 };
+
+const ArrowIcon = () => <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M13 6l6 6-6 6" /></svg>;
