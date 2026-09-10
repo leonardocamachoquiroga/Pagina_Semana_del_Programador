@@ -3,8 +3,6 @@ import Layout from '../../layouts/Layout.astro';
 import { TVRouter } from '../../components/TVRouter';
 ---
 
-<Layout title="Pantallas TV Estaciones | Vibecodear Jueguitos">
-  <div className="py-8">
-    <TVRouter client:only="react" />
-  </div>
+<Layout title="Estaciones | Día del Programador UCB">
+  <TVRouter client:only="react" />
 </Layout>
