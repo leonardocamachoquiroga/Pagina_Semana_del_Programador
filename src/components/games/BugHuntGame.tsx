@@ -8,6 +8,7 @@ import { BUG_CHALLENGES, BUG_DIFFICULTIES, BUG_LANGUAGES, type BugDifficulty, ty
 interface BugRoundState {
   selectedLines: number[];
   isEvaluated: boolean;
+  isSolved: boolean;
   score: number;
   message: string;
 }
@@ -17,6 +18,7 @@ type BugProgress = Record<BugLanguageId, Record<BugDifficulty, BugRoundState>>;
 const createBugRound = (): BugRoundState => ({
   selectedLines: [],
   isEvaluated: false,
+  isSolved: false,
   score: 0,
   message: ''
 });
@@ -49,6 +51,7 @@ export const BugHuntGame: React.FC = () => {
   const currentRound = progress[selectedLanguage.id][selectedDifficulty.id];
   const bugCount = challenge.lines.filter((line) => line.isBug).length;
   const isChallengeComplete = Boolean(completedLanguages[selectedLanguage.id]);
+  const nextDifficulty = BUG_DIFFICULTIES[selectedDifficultyIndex + 1];
 
   const resetChallenge = () => {
     setProgress(createBugProgress());
@@ -108,11 +111,11 @@ export const BugHuntGame: React.FC = () => {
     const calculatedScore = Math.max(0, (correctSelections / bugLines.length) * 100 - incorrectSelections * 25);
     const score = Math.round(calculatedScore);
     const solved = score === 100 && correctSelections === bugLines.length && incorrectSelections === 0;
-    const nextDifficulty = BUG_DIFFICULTIES[selectedDifficultyIndex + 1];
     const languageId = selectedLanguage.id;
 
     updateCurrentRound((round) => ({
       ...round,
+      isSolved: solved,
       score,
       isEvaluated: true,
       message: solved && nextDifficulty
@@ -122,13 +125,15 @@ export const BugHuntGame: React.FC = () => {
           : 'La selección tiene errores. Reinicia este nivel para intentarlo otra vez.'
     }));
 
-    if (selectedDifficulty.id === 'dificil') {
+    if (solved && selectedDifficulty.id === 'dificil') {
       setCompletedLanguages((current) => ({ ...current, [languageId]: true }));
       setFinalResults((current) => ({ ...current, [languageId]: { score, title: challenge.titulo } }));
-      return;
     }
+  };
 
-    if (solved && nextDifficulty) setSelectedDifficultyIndex(selectedDifficultyIndex + 1);
+  const goToNextDifficulty = () => {
+    if (!currentRound.isEvaluated || !currentRound.isSolved || !nextDifficulty) return;
+    setSelectedDifficultyIndex(selectedDifficultyIndex + 1);
   };
 
   const finalResult = finalResults[selectedLanguage.id];
@@ -191,10 +196,10 @@ export const BugHuntGame: React.FC = () => {
             <button type="button" className="button button-primary" onClick={evaluate}>
               <Bug aria-hidden="true" /> Evaluar selección
             </button>
-          ) : currentRound.score < 100 && selectedDifficulty.id !== 'dificil' ? (
-            <div className="form-actions"><p className="feedback feedback--error" aria-live="polite">Resultado: {currentRound.score}/100. Revisa la línea marcada.</p><button type="button" className="button button-secondary" onClick={resetCurrentLevel}><RotateCcw aria-hidden="true" /> Reintentar nivel</button></div>
+          ) : !currentRound.isSolved ? (
+            <div className="form-actions"><p className="feedback feedback--error" aria-live="polite">Resultado: {currentRound.score}/100. Revisa las líneas marcadas en rojo.</p><button type="button" className="button button-secondary" onClick={resetCurrentLevel}><RotateCcw aria-hidden="true" /> Reintentar nivel</button></div>
           ) : (
-            <p className="feedback feedback--success" aria-live="polite"><CheckCircle2 aria-hidden="true" /> Resultado: {currentRound.score}/100. {currentRound.message}</p>
+            <div className="form-actions"><p className="feedback feedback--success" aria-live="polite"><CheckCircle2 aria-hidden="true" /> Resultado: {currentRound.score}/100. {currentRound.message}</p>{nextDifficulty && <button type="button" className="button button-primary" onClick={goToNextDifficulty}>Siguiente dificultad: {nextDifficulty.label}</button>}</div>
           )}
         </div>
       </section>
